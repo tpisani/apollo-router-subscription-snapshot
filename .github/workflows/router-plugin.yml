@@ -1,0 +1,33 @@
+name: Router plugin
+on:
+  push:
+    paths: ['router-plugin/**', 'router/**', 'scripts/router-harness.mjs', '.github/workflows/router-plugin.yml']
+  pull_request:
+    paths: ['router-plugin/**', 'router/**', 'scripts/router-harness.mjs', '.github/workflows/router-plugin.yml']
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: router-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+        working-directory: .
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: router-plugin
+      # Testes de unidade do plugin (não precisam de licença).
+      - run: cargo test --release --locked
+      - run: cargo build --release --locked
+      # A config do perfil apollo-plugin, validada pelo próprio binário com o plugin.
+      - run: ./target/release/router config validate ../router/router-plugin.yaml
+      # O plugin no pipeline do Router (TestHarness), contra os subgraphs Node.
+      - run: npm run test:router-harness
+        working-directory: .

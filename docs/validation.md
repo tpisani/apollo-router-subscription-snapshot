@@ -1,9 +1,9 @@
 # Validação realizada
 
 Ambiente: Linux, Node.js 22.22.0, Hive Gateway 2.15.2, Apollo Router 2.10.0
-(só validação de config), Docker 29.8.
+(validação de config), apollo-router 2.10.5 com o plugin (Rust 1.97), Docker 29.8.
 
-## Testes (`npm test`: 35 aprovados, 3 execuções seguidas)
+## Testes (`npm test`: 36 aprovados)
 
 - **`tests/domain.test.mjs` (8):**
   - patches e a propriedade de sobreposição (usados no modo `delta` dos
@@ -49,6 +49,41 @@ Ambiente: Linux, Node.js 22.22.0, Hive Gateway 2.15.2, Apollo Router 2.10.0
 | Instância derrubada no meio do jogo (12 clientes, lances e gols contínuos) | 8 clientes migraram pelo balanceador; todos sincronizados de novo em **145–163 ms** (3 rodadas); nenhuma versão regrediu; estado final exato |
 | Limpeza | sem assinantes, nenhuma instância guarda upstream nem frame retido; subgraph sem streams |
 
+- **`tests/router-scale.test.mjs` (1):** o roteiro `scripts/verify-router-scale.mjs`,
+  feito para os Routers com o plugin, contra o emulador (3 edges + 1 sem
+  retenção), para provar o próprio roteiro antes de rodá-lo com a licença:
+  6 streams por canal para 24 clientes (3 instâncias × 2 partidas); late joiner
+  em 4–7 ms com frame retido contra ~1.850 ms sem; 2 upstreams para 2 tokens;
+  12 clientes com uma instância derrubada, 8 migraram e todos voltaram em 146 ms,
+  sem regressão; limpeza.
+
+## Plugin do Router (`router-plugin/`, `poc.retain_last_frame`)
+
+- **`cargo test --release` (7):** o marcador passa intacto; o primeiro assinante
+  não recebe frame retido e alimenta o store; o late joiner recebe o retido logo
+  depois do marcador, com `subscribed` aberto, e depois os eventos ao vivo;
+  chaves diferentes não compartilham; erros e o item final não são retidos; a
+  entrada some quando o último assinante sai; respostas que não são subscription
+  aberta passam intactas; a chave inclui variáveis e identidade.
+- **`npm run test:router-harness` (3), 3 execuções seguidas:** o plugin no
+  pipeline do Router pelo `TestHarness` do crate (router service, deduplicação,
+  passthrough `graphql_ws` para os subgraphs Node, multipart), frame periódico de
+  3 s:
+
+| Teste | Resultado |
+| --- | --- |
+| Deduplicação e retenção | 1 stream no subgraph para 2 clientes; late joiner em **1 ms** com `retainedFrame`, na mesma versão do primeiro; os dois recebem o gol seguinte; sem assinantes, o upstream fecha |
+| Sem retenção (`enabled: false`) | late joiner em **2.799 ms**, esperando o periódico |
+| Identidade | `authorization` diferente: 2 upstreams, e só o cliente com o mesmo token recebe o frame retido |
+
+  **Mutação conferida:** inserir o frame retido antes do marcador faz dois testes
+  falharem; o late joiner recebe `{"data":null}` e o frame se perde.
+- **Binário:** `cargo build --release` gera `target/release/router` (2.10.5).
+  `router config validate router/router-plugin.yaml` passa, com e sem
+  `RETAIN_ENABLED`; um campo desconhecido no plugin é rejeitado pelo schema.
+- **Sem chave**, o binário para na inicialização: `license violation ...
+  ["Federated subscriptions"]`, como esperado.
+
 ## Benchmark (`npm run bench`, 10 s)
 
 100 clientes só de placar + 50 com os dois canais; 20 lances/s com uma rajada
@@ -79,9 +114,11 @@ de estatísticas no mesmo benchmark. O estado inteiro custa ~1,8× em banda aqui
 
 ## Não verificado
 
-- **Apollo Router em execução:** sem licença, ele recusa iniciar. A
-  deduplicação, o cache e a **retenção** foram emulados; o plugin em Rust foi
-  só esboçado.
+- **O binário com GraphOS:** sem chave, ele não inicia. Prontos para rodar com
+  ela: `docker compose --profile apollo-plugin up --build -d` (3 routers com o
+  plugin, 1 sem, balanceador) e `npm run test:router-scale` (com `KILL_CMD` para
+  derrubar uma instância). O `TestHarness` cobre uma instância; várias instâncias
+  do Router de verdade e o response cache com Redis ainda não rodaram.
 - **Balanceador real** (ALB, NGINX, Envoy): o do teste é um round-robin simples
   com streaming. Num LB real, confira o timeout de ociosidade (maior que o frame
   periódico) e que as respostas multipart não são bufferizadas.

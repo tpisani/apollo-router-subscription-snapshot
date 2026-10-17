@@ -12,9 +12,10 @@ deduplicação e o cache do Router.
   o jogo está calmo, e no máximo 2 frames/s numa rajada.
 - **Uma regra só no cliente:** fica com o frame de maior versão. Não há lacuna,
   histórico nem query de recuperação.
-- **Retenção do último frame** (protótipo de um plugin do Router): quem entra num
-  upstream já aberto recebe o estado na hora (12 ms, contra ~2 s esperando o
-  frame periódico).
+- **Retenção do último frame**, num plugin nativo do Apollo Router
+  ([`router-plugin/`](router-plugin/)) e no emulador: quem entra num upstream já
+  aberto recebe o estado na hora (1 ms no pipeline do Router, contra ~2,8 s
+  esperando o frame periódico).
 - **Várias instâncias:** cada uma deduplica e retém os seus upstreams; uma
   instância que cai é absorvida pelas outras em ~150 ms, sem regressão de versão.
 - **Uma lista de jogos assina só o placar** e não recebe nenhum byte de
@@ -29,7 +30,8 @@ Por que dois canais, estado inteiro, retenção e várias instâncias, com os ex
 
 - **Políticas de envio por canal (hub, limitador, frame periódico, fila):** [`src/channels.mjs`](src/channels.mjs)
 - **Cliente (`StateSync`, igual nos dois canais):** [`client/sync.mjs`](client/sync.mjs)
-- **Retenção, chave com identidade e cache (protótipo do plugin do Router):** [`scripts/edge.mjs`](scripts/edge.mjs)
+- **Plugin do Router `poc.retain_last_frame` (Rust):** [`router-plugin/src/retain.rs`](router-plugin/src/retain.rs)
+- **Retenção, chave com identidade e cache no emulador:** [`scripts/edge.mjs`](scripts/edge.mjs)
 - **Várias instâncias atrás de um balanceador:** [`scripts/balancer.mjs`](scripts/balancer.mjs), [`tests/scale.test.mjs`](tests/scale.test.mjs)
 - **Domínio (placar, relógio, estatísticas):** [`src/sports.mjs`](src/sports.mjs)
 - **Schemas dos subgraphs `scores`, `stats` e `catalog`:** [`src/schemas.mjs`](src/schemas.mjs)
@@ -91,10 +93,21 @@ GRAPHQL_URL=http://localhost:4100/graphql npm run client
 npm run test:router      # o mesmo cenário dos testes, contra o Router
 ```
 
+### Router customizado com o plugin de retenção
+
+```bash
+npm run test:router-harness   # sem licença: o plugin no pipeline do Router (TestHarness)
+docker compose --profile apollo-plugin up --build -d   # com APOLLO_KEY: 3 routers + balanceador
+npm run test:router-scale     # várias instâncias, late joiner, identidade, queda e limpeza
+```
+
+Detalhes em [`router-plugin/README.md`](router-plugin/README.md).
+
 ## Testes, experimentos e benchmark
 
 ```bash
-npm test                 # 35 testes: domínio, canais, cliente, experimentos, ponta a ponta e várias instâncias
+npm test                 # 36 testes: domínio, canais, cliente, experimentos, ponta a ponta e várias instâncias
+(cd router-plugin && cargo test --release)   # 7 testes de unidade do plugin
 npm run bench            # partida simulada pelo edge: 100 clientes só de placar + 50 completos
 EDGES=3 npm run bench    # o mesmo com 3 instâncias atrás de um balanceador
 SCORE_ONLY=0 FULL=200 STORM_RATE=400 npm run bench
@@ -105,10 +118,11 @@ SCORE_ONLY=0 FULL=200 STORM_RATE=400 npm run bench
 - Sem autenticação: `matchId` é só um seletor.
 - Hubs em memória: um processo por subgraph. Com réplicas, alimente o hub por um
   bus depois do commit.
-- A retenção é um protótipo no edge; no Apollo Router ela exigiria um plugin
-  nativo (Rust) num build customizado.
+- A retenção no Apollo Router exige um build customizado com plugin nativo, sem
+  suporte da Apollo.
 - Placar e estatísticas não são consistentes entre si numa transação: as
   estatísticas podem estar até ~0,5 s atrás do placar (ver
   [design](docs/design.md#consistência-entre-canais)).
-- A deduplicação e o response cache do Router foram emulados; a config foi
-  validada com o binário oficial, não executada.
+- O Router com licença ainda não foi executado aqui: o plugin rodou no pipeline do
+  Router pelo `TestHarness` (deduplicação, WebSocket e multipart reais); o binário
+  com GraphOS e o response cache, não. Ver [validação](docs/validation.md).

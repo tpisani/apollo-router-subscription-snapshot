@@ -13,9 +13,9 @@
   frame periódico.
 - **As subscriptions só têm `matchId`:** o Router deduplica, com um upstream por
   canal e partida em cada instância.
-- **Retenção do último frame** (protótipo de um plugin do Router, em
-  `scripts/edge.mjs`): quem entra num upstream já aberto recebe o estado na hora,
-  em vez de esperar o frame periódico.
+- **Retenção do último frame** (plugin nativo do Router em `router-plugin/`, e o
+  mesmo comportamento no emulador `scripts/edge.mjs`): quem entra num upstream já
+  aberto recebe o estado na hora, em vez de esperar o frame periódico.
 - **Várias instâncias:** cada uma deduplica e retém só os seus upstreams, e isso
   basta. Ninguém precisa compartilhar o último estado.
 
@@ -98,27 +98,38 @@ O hub, no modo `state` com `throttleMs`:
 3. Fica sincronizado no primeiro frame de cada conexão.
 4. Queda ou 5 s sem frames: reconecta mantendo o estado. O próximo frame resolve.
 
-## Retenção do último frame (protótipo do plugin)
+## Retenção do último frame (plugin do Router)
 
 O Router não tem configuração para reenviar o último evento a quem entra num
 upstream deduplicado:
 - **Rhai:** não guarda estado entre requisições.
 - **Coprocessor:** não cria um frame quando o cliente se conecta.
 
-Seria um **plugin nativo em Rust** num build customizado. `scripts/edge.mjs`
-implementa esse comportamento para medir:
+Por isso é um **plugin nativo em Rust** num build customizado
+(`router-plugin/`, `poc.retain_last_frame`, apollo-router 2.10.5).
+`scripts/edge.mjs` faz o mesmo no emulador.
 
-- **Retenção:** guarda o último frame de cada upstream deduplicado e o escreve
-  primeiro para quem entra. O frame retido some junto com o upstream, quando o
-  último assinante sai.
+- **Retenção:** guarda o último evento (com dados e sem erros) de cada chave e o
+  entrega primeiro a quem entra. O frame retido some quando o último assinante da
+  chave sai, junto com o upstream.
+- **Onde o frame entra:** no `supergraph_service`, **depois** do primeiro item do
+  stream. Numa subscription, o primeiro item é um marcador sem dados que o router
+  service consome para abrir o multipart e não envia. Inserido antes dele, o frame
+  retido é engolido e o cliente recebe `{"data":null}`; o teste de integração
+  falha exatamente assim quando a ordem é invertida.
 - **Chave com identidade:** os headers configurados (ex.: `authorization`) entram
-  na chave de deduplicação, de retenção e de cache de queries. Clientes com
-  identidades diferentes não compartilham upstream nem frame retido.
+  na chave de retenção. No Router, o mesmo header é propagado ao subgraph, então a
+  deduplicação também separa por identidade. Clientes com identidades diferentes
+  não compartilham upstream nem frame retido.
+- **Marcação:** o frame retido sai com `extensions.retainedFrame: true`, usado só
+  pelos testes.
 - **Correção:** só funciona porque todo frame traz o estado inteiro e uma versão.
   Um frame retido mais velho que um em trânsito é ignorado pelo cliente.
 
-Medido (`tests/scale.test.mjs`, frame periódico de 2 s): quem entra numa partida
-parada fica sincronizado em **12 ms com retenção, contra 1.997 ms sem**.
+Medido no pipeline do Router (`npm run test:router-harness`, frame periódico de
+3 s): o late joiner recebeu o estado em **1 ms com o plugin, contra 2.799 ms
+sem**, com um único stream no subgraph para os dois clientes. No emulador
+(`tests/scale.test.mjs`, periódico de 2 s): 12 ms contra 1.997 ms.
 
 ## Várias instâncias
 
@@ -154,9 +165,13 @@ podem estar até ~0,5 s atrás do placar. Por isso gols ficam só no placar.
 
 ## Limites
 
-- **Apollo Router não executado aqui:** a deduplicação, o cache e a retenção
-  foram emulados. A config (`router/router.yaml`) foi validada com o binário 2.10,
-  e o plugin de retenção é um esboço; não foi escrito em Rust.
+- **Apollo Router com licença não executado aqui:** o plugin rodou no pipeline do
+  Router pelo `TestHarness` do crate (deduplicação, WebSocket e multipart reais,
+  uma instância). Várias instâncias do binário com GraphOS, o balanceador e o
+  response cache estão prontos (`--profile apollo-plugin`,
+  `npm run test:router-scale`), mas dependem da chave.
+- **Plugin sem suporte da Apollo:** é preciso recompilar a cada versão do Router e
+  acompanhar a forma interna do stream de subscription.
 - **Identidade:** o edge usa a identidade só na chave. Num Router real, a
   autorização precisa valer no subgraph também.
 - **Lista com muitas partidas:** um canal por competição reduziria o número de
@@ -168,5 +183,7 @@ podem estar até ~0,5 s atrás do placar. Por isso gols ficam só no placar.
    deduplicação.
 2. `0f06630`: stream compartilhado + log de eventos paginado e cacheável.
 3. `9a87874`: domínio esportivo, dois canais, patch adaptativo nas estatísticas.
-4. Atual: estado inteiro com limitador nos dois canais, retenção do último frame
-   e várias instâncias atrás de um balanceador.
+4. `76ef488`: estado inteiro com limitador nos dois canais, retenção do último
+   frame e várias instâncias atrás de um balanceador (emulados).
+5. Atual: o plugin de retenção em Rust, testado no pipeline do Router, e o perfil
+   com 3 routers customizados atrás de um balanceador.

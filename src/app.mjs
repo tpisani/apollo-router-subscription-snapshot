@@ -31,7 +31,7 @@ const minVersionOf = value => {
 const statsOut = state => ({ ...state, players: Object.entries(state.players).map(([id, p]) => ({ id, ...p })) });
 
 function channelMetrics() {
-  return { commits: 0, snapshotRequests: 0, streamsOpened: 0, activeStreams: 0, framesEmitted: 0, framesSent: 0, merges: 0 };
+  return { commits: 0, snapshotRequests: 0, streamsOpened: 0, activeStreams: 0, activeByMatch: {}, framesEmitted: 0, framesSent: 0, merges: 0 };
 }
 
 function liveField(hub, metrics, resolve) {
@@ -39,7 +39,12 @@ function liveField(hub, metrics, resolve) {
     subscribe: wrap((_, { matchId }) => {
       if (typeof matchId !== 'string' || !matchId || matchId.length > 100) throw new SyncError('Partida inválida', 'BAD_USER_INPUT');
       metrics.streamsOpened++; metrics.activeStreams++;
-      const stream = new LiveStream({ hub, key: matchId, onClose: () => metrics.activeStreams--, onMerge: () => metrics.merges++ });
+      metrics.activeByMatch[matchId] = (metrics.activeByMatch[matchId] ?? 0) + 1;
+      const onClose = () => {
+        metrics.activeStreams--;
+        if (!--metrics.activeByMatch[matchId]) delete metrics.activeByMatch[matchId];
+      };
+      const stream = new LiveStream({ hub, key: matchId, onClose, onMerge: () => metrics.merges++ });
       return {
         async next() { const result = await stream.next(); if (!result.done) metrics.framesSent++; return result; },
         return: () => stream.return(),
@@ -156,7 +161,7 @@ export async function startSubgraphs({
   const snapshots = { scoreboard: new SnapshotCache(stores.scoreboard, snapshotTtlMs), stats: new SnapshotCache(stores.stats, snapshotTtlMs) };
 
   const current = () => Object.fromEntries(Object.entries(metrics).map(([name, m]) =>
-    [name, { ...m, snapshotDbReads: snapshots[name].reads, hubListeners: hubs[name].size }]));
+    [name, { ...m, activeByMatch: { ...m.activeByMatch }, snapshotDbReads: snapshots[name].reads, hubListeners: hubs[name].size }]));
   const withMetrics = (req, res) => {
     if (req.method !== 'GET' || req.url !== '/metrics') return false;
     res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(current())); return true;

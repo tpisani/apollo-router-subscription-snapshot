@@ -3,3 +3,4 @@ data/
 .env
 gateway/supergraph.graphql
 *.log
+.ca.tmp.crt

@@ -5,6 +5,9 @@ services:
       DATA_DIR: /data
       # Simula a partida m1 (lances e gols); remova para usar só as mutations.
       SIMULATE: m1
+      # Frame periódico; maior deixa mais visível o efeito da retenção.
+      SCOREBOARD_PERIODIC_MS: ${SCOREBOARD_PERIODIC_MS:-1000}
+      STATS_PERIODIC_MS: ${STATS_PERIODIC_MS:-1000}
     volumes:
       - match-data:/data
     ports:
@@ -49,7 +52,7 @@ services:
   # com licença para subscriptions federadas e response cache).
   #   docker compose --profile apollo up --build -d
   supergraph:
-    profiles: [apollo]
+    profiles: [apollo, apollo-plugin]
     build: .
     environment:
       SCORES_URL: http://subgraphs:4001/graphql
@@ -85,6 +88,61 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  # Perfil apollo-plugin: o Router customizado de router-plugin/ (apollo-router
+  # 2.10.5 + poc.retain_last_frame), em 3 instâncias atrás de um balanceador sem
+  # afinidade, e uma quarta com a retenção desligada para comparar. Exige
+  # APOLLO_KEY/APOLLO_GRAPH_REF (subscriptions federadas estão no plano gratuito).
+  #   docker compose --profile apollo-plugin up --build -d
+  #   npm run test:router-scale
+  router-a: &plugin-router
+    profiles: [apollo-plugin]
+    build: ./router-plugin
+    image: poc-router:local
+    command: ["--config", "/dist/config/router-plugin.yaml", "--supergraph", "/supergraph/supergraph.graphql"]
+    environment:
+      APOLLO_KEY: ${APOLLO_KEY:-}
+      APOLLO_GRAPH_REF: ${APOLLO_GRAPH_REF:-}
+      RETAIN_ENABLED: "true"
+    volumes:
+      - ./router:/dist/config:ro
+      - supergraph:/supergraph:ro
+    ports:
+      - "127.0.0.1:4101:4100"
+    depends_on:
+      supergraph:
+        condition: service_completed_successfully
+      subgraphs:
+        condition: service_healthy
+  router-b:
+    <<: *plugin-router
+    ports:
+      - "127.0.0.1:4102:4100"
+  router-c:
+    <<: *plugin-router
+    ports:
+      - "127.0.0.1:4103:4100"
+  router-plain:
+    <<: *plugin-router
+    environment:
+      APOLLO_KEY: ${APOLLO_KEY:-}
+      APOLLO_GRAPH_REF: ${APOLLO_GRAPH_REF:-}
+      RETAIN_ENABLED: "false"
+    ports:
+      - "127.0.0.1:4104:4100"
+  balancer:
+    profiles: [apollo-plugin]
+    build: .
+    environment:
+      TARGETS: http://router-a:4100,http://router-b:4100,http://router-c:4100
+      LB_PORT: 4200
+    command: ["node", "scripts/balancer.mjs"]
+    ports:
+      - "127.0.0.1:4200:4200"
+    depends_on:
+      - router-a
+      - router-b
+      - router-c
 
 volumes:
   match-data:

@@ -1,0 +1,206 @@
+import assert from 'node:assert/strict';
+import { execSync } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
+import { createSync, runSync, statsFromWire } from '../client/sync.mjs';
+import { graphql, snapshotApi, transports } from '../client/transport.mjs';
+import { playGenerator } from '../src/sports.mjs';
+
+async function until(predicate, message, ms = 10_000) {
+  for (const end = Date.now() + ms; Date.now() < end; await delay(20)) if (await predicate()) return;
+  throw new Error(`Timeout: ${message}`);
+}
+const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
+const monotonic = list => list.every((v, i) => i === 0 || v >= list[i - 1]);
+
+// Várias instâncias do Router com o plugin poc.retain_last_frame, medidas pelo
+// cliente e pelos subgraphs (/metrics, streams abertos por partida):
+//   routerUrls: cada instância com retenção, acessada direto
+//   lbUrl:      um balanceador na frente delas (sem afinidade)
+//   plainUrl:   uma instância igual, com a retenção desligada (comparação)
+//   kill():     opcional, derruba uma instância no meio do jogo
+// Roda também contra o emulador (tests/router-scale.test.mjs), com edges no lugar dos routers.
+export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, kill, headers = {}, log = () => {} }) {
+  const run = Math.random().toString(36).slice(2, 7);
+  const result = {};
+  const clients = [];
+
+  const mutations = url => {
+    const call = async (query, variables, field) => (await graphql(url, query, variables, undefined, headers))[field];
+    return {
+      startPeriod: async matchId => (await call('mutation($m: ID!) { startPeriod(matchId: $m, period: 1) { version } }', { m: matchId }, 'startPeriod')).version,
+      goal: async matchId => (await call('mutation($m: ID!) { scoreGoal(matchId: $m, side: HOME) { version } }', { m: matchId }, 'scoreGoal')).version,
+      plays: async (matchId, events) => call('mutation($m: ID!, $e: [StatEventInput!]!) { recordStats(matchId: $m, events: $e) }', { m: matchId, e: events }, 'recordStats')
+    };
+  };
+  const api = mutations(lbUrl);
+
+  // Cliente com um ou dois canais; registra versões vistas, frames retidos e o
+  // tempo até o primeiro estado.
+  const connect = (url, matchId, channels, { headers: clientHeaders = headers } = {}) => {
+    const controller = new AbortController();
+    const c = { syncs: {}, seen: {}, retained: {}, errors: [], runs: [], t0: Date.now(), syncedAt: {} };
+    for (const channel of channels) {
+      const sync = createSync(channel, { matchId, api: snapshotApi(url, channel, matchId, { headers: clientHeaders }) });
+      c.syncs[channel] = sync; c.seen[channel] = []; c.retained[channel] = 0;
+      c.runs.push(runSync({ sync, signal: controller.signal, wait: () => 100, stallMs: 5000,
+        connect: signal => transports.multipart(url, channel, matchId, { signal, headers: clientHeaders,
+          onPayload: payload => { if (payload.extensions?.retainedFrame) c.retained[channel]++; } }),
+        onUpdate: view => {
+          if (view.version !== null) c.seen[channel].push(view.version);
+          if (view.synced) c.syncedAt[channel] ??= Date.now();
+        },
+        onError: error => c.errors.push(error) }));
+    }
+    c.synced = () => Object.values(c.syncs).every(s => s.synced);
+    c.close = async () => { controller.abort(); await Promise.all(c.runs); };
+    clients.push(c);
+    return c;
+  };
+  const streams = async (channel, matchId) => (await metrics())[channel].activeByMatch?.[matchId] ?? 0;
+  const closeAll = async list => { await Promise.all(list.map(c => c.close())); };
+
+  try {
+    // 1. Deduplicação por instância: 4 clientes por instância e partida, 2 partidas.
+    //    Streams no subgraph = instâncias × partidas × canais, não clientes.
+    {
+      const matches = [`dedup-a-${run}`, `dedup-b-${run}`];
+      for (const m of matches) await api.startPeriod(m);
+      const list = routerUrls.flatMap(url => matches.flatMap(m => Array.from({ length: 4 }, () => connect(url, m, ['scoreboard', 'stats']))));
+      await until(() => list.every(c => c.synced()), 'clientes sincronizados', 20_000);
+      await delay(300);
+      const counts = {};
+      for (const m of matches) counts[m] = { placar: await streams('scoreboard', m), estatisticas: await streams('stats', m) };
+      result.deduplicacao = { instancias: routerUrls.length, clientes: list.length, streamsNoSubgraphPorPartida: counts };
+      log(`deduplicação: ${JSON.stringify(result.deduplicacao)}`);
+      for (const m of matches) {
+        assert.equal(counts[m].placar, routerUrls.length, `placar ${m}: um stream por instância (veio ${counts[m].placar})`);
+        assert.equal(counts[m].estatisticas, routerUrls.length, `estatísticas ${m}: um stream por instância (veio ${counts[m].estatisticas})`);
+      }
+      await closeAll(list);
+    }
+
+    // 2. Late joiner numa partida parada: com retenção, o estado vem na hora;
+    //    sem, espera o frame periódico do subgraph.
+    {
+      const measure = async (url, label, i) => {
+        const matchId = `late-${label}-${i}-${run}`;
+        await api.startPeriod(matchId);
+        const first = connect(url, matchId, ['scoreboard']);
+        await until(() => first.synced(), `primeiro cliente (${label})`);
+        await delay(150);                               // o upstream já está aberto e parado
+        const late = connect(url, matchId, ['scoreboard']);
+        await until(() => late.synced(), `late joiner (${label})`, 10_000);
+        await closeAll([first, late]);
+        return { ms: late.syncedAt.scoreboard - late.t0, retained: late.retained.scoreboard };
+      };
+      const withRetention = []; const without = [];
+      for (let i = 0; i < 3; i++) {
+        withRetention.push(await measure(routerUrls[0], 'retencao', i));
+        if (plainUrl) without.push(await measure(plainUrl, 'sem', i));
+      }
+      result.lateJoiner = {
+        comRetencaoMs: withRetention.map(x => x.ms), framesRetidos: withRetention.map(x => x.retained),
+        semRetencaoMs: without.map(x => x.ms), framesRetidosSemRetencao: without.map(x => x.retained)
+      };
+      log(`late joiner: ${JSON.stringify(result.lateJoiner)}`);
+      for (const x of withRetention) {
+        assert.ok(x.retained >= 1, 'o late joiner recebeu o frame retido');
+        assert.ok(x.ms < 300, `com retenção: ${x.ms} ms`);
+      }
+      for (const x of without) assert.equal(x.retained, 0, 'sem retenção, nenhum frame retido');
+      if (without.length) assert.ok(median(without.map(x => x.ms)) > median(withRetention.map(x => x.ms)), 'sem retenção, o late joiner espera mais');
+    }
+
+    // 3. Identidade: tokens diferentes não compartilham upstream nem frame retido.
+    {
+      const matchId = `identidade-${run}`;
+      await api.startPeriod(matchId);
+      const url = routerUrls[0];
+      const a1 = connect(url, matchId, ['scoreboard'], { headers: { ...headers, authorization: 'Bearer a' } });
+      await until(() => a1.synced(), 'a1');
+      await delay(150);
+      const b = connect(url, matchId, ['scoreboard'], { headers: { ...headers, authorization: 'Bearer b' } });
+      const a2 = connect(url, matchId, ['scoreboard'], { headers: { ...headers, authorization: 'Bearer a' } });
+      await until(() => b.synced() && a2.synced(), 'b e a2');
+      await delay(300);
+      result.identidade = { streamsNoSubgraph: await streams('scoreboard', matchId), retidos: { b: b.retained.scoreboard, a2: a2.retained.scoreboard } };
+      log(`identidade: ${JSON.stringify(result.identidade)}`);
+      assert.equal(result.identidade.streamsNoSubgraph, 2, 'um upstream por identidade');
+      assert.equal(b.retained.scoreboard, 0, 'b (outro token) não recebeu o frame de a');
+      assert.ok(a2.retained.scoreboard >= 1, 'a2 (mesmo token de a1) recebeu o frame retido');
+      await closeAll([a1, b, a2]);
+    }
+
+    // 4. Jogo ao vivo pelo balanceador; opcionalmente uma instância cai no meio.
+    //    Nenhuma versão regride e todos terminam no estado do banco.
+    {
+      const matchId = `ao-vivo-${run}`;
+      const next = playGenerator(matchId, 4);
+      let scoreVersion = await api.startPeriod(matchId); let statsVersion = 0;
+      const list = Array.from({ length: 12 }, () => connect(lbUrl, matchId, ['scoreboard', 'stats']));
+      await until(() => list.every(c => c.synced()), '12 clientes pelo balanceador', 20_000);
+      let killed = null;
+      const t0 = Date.now(); let goals = 0;
+      while (Date.now() - t0 < 5000) {
+        statsVersion = await api.plays(matchId, [next(), next()]);
+        if (Math.floor((Date.now() - t0) / 1000) > goals) { scoreVersion = await api.goal(matchId); goals++; }
+        if (kill && !killed && Date.now() - t0 > 2000) {
+          killed = { at: Date.now() };
+          await kill();
+          killed.recovery = (async () => {
+            await until(() => list.some(c => !c.synced()), 'queda percebida', 5000).catch(() => {});
+            await until(() => list.every(c => c.synced()), 'recuperação', 20_000);
+            return Date.now() - killed.at;
+          })();
+        }
+        await delay(50);
+      }
+      await until(() => list.every(c => c.syncs.scoreboard.version === scoreVersion && c.syncs.stats.version === statsVersion), 'todos na versão final', 20_000);
+      const truth = await snapshotApi(lbUrl, 'stats', matchId, { headers }).snapshot(statsVersion);
+      for (const c of list) {
+        for (const channel of ['scoreboard', 'stats']) assert.ok(monotonic(c.seen[channel]), `${channel} regrediu`);
+        assert.equal(c.syncs.stats.version, truth.version);
+        assert.deepEqual(c.syncs.stats.state, statsFromWire(truth.state), 'estatísticas diferentes do banco');
+        assert.equal(c.syncs.scoreboard.state.home, goals);
+      }
+      result.aoVivo = {
+        clientes: list.length, gols: goals, versoes: { placar: scoreVersion, estatisticas: statsVersion },
+        framesRetidosRecebidos: list.reduce((n, c) => n + c.retained.scoreboard + c.retained.stats, 0),
+        ...(killed && { instanciaDerrubada: true, reconectaram: list.filter(c => c.errors.length).length, recuperacaoMs: await killed.recovery })
+      };
+      log(`ao vivo: ${JSON.stringify(result.aoVivo)}`);
+      if (killed) assert.ok(result.aoVivo.reconectaram >= 1, 'algum cliente estava na instância derrubada');
+      await closeAll(list);
+    }
+
+    // 5. Limpeza: sem assinantes, o Router fecha os upstreams (e o plugin solta os frames).
+    {
+      const ours = m => Object.keys(m).filter(k => k.endsWith(run));
+      await until(async () => { const m = await metrics(); return !ours(m.scoreboard.activeByMatch ?? {}).length && !ours(m.stats.activeByMatch ?? {}).length; }, 'upstreams fechados no subgraph', 20_000);
+      result.limpeza = 'sem streams no subgraph para as partidas do teste';
+    }
+    return result;
+  } finally {
+    await closeAll(clients);
+  }
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  // Contra o perfil apollo-plugin do compose (docker compose --profile apollo-plugin up):
+  //   3 routers com o plugin (4101-4103), um sem retenção (4104), balanceador (4200).
+  // KILL_CMD derruba uma instância no meio do jogo, ex.:
+  //   KILL_CMD="docker compose --profile apollo-plugin stop router-b" npm run test:router-scale
+  const scoresMetrics = process.env.SCORES_METRICS_URL ?? 'http://localhost:4001/metrics';
+  const statsMetrics = process.env.STATS_METRICS_URL ?? 'http://localhost:4003/metrics';
+  const routerUrls = (process.env.ROUTER_URLS ?? 'http://localhost:4101/graphql,http://localhost:4102/graphql,http://localhost:4103/graphql').split(',');
+  const result = await verifyRouterScale({
+    lbUrl: process.env.LB_URL ?? 'http://localhost:4200/graphql',
+    routerUrls,
+    plainUrl: process.env.PLAIN_URL ?? 'http://localhost:4104/graphql',
+    metrics: async () => ({ scoreboard: (await (await fetch(scoresMetrics)).json()).scoreboard, stats: (await (await fetch(statsMetrics)).json()).stats }),
+    kill: process.env.KILL_CMD ? async () => { execSync(process.env.KILL_CMD, { stdio: 'inherit' }); } : undefined,
+    log: console.log
+  });
+  console.log(JSON.stringify(result, null, 2));
+  console.log('OK: deduplicação por instância, frame retido para late joiners, identidade, jogo ao vivo sem regressão e limpeza');
+}

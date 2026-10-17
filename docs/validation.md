@@ -1,37 +1,47 @@
 # Validação realizada
 
-Ambiente: Node.js 24.19.0, Apollo Router 2.10.0, Linux.
+Ambiente: Linux, Node.js 22.22.0, Hive Gateway 2.15.2, Docker 29.8.
 
 ## Executado com sucesso
 
-- `npm ci` / instalação a partir do lockfile.
-- `npm test`: **13 testes aprovados**, incluindo servidor real HTTP/WS e SQLite.
-- `npm run compose-schema`: dois subgraphs compostos sem erros.
-- Binário oficial: `router config validate router/router.yaml`, configuração válida.
+- `npm test`: **14 testes aprovados**, 5 execuções seguidas sem falha.
+  - 11 testes de feed/store: SNAPSHOT e ao vivo, replay por cursor, escolha
+    entre replay e snapshot (expirado, distante, acima do head, inválido),
+    200 escritas intercaladas com aberturas de feed sem lacuna nem duplicata,
+    liberação do listener em `return()`, `SLOW_CONSUMER`, lote de eventos
+    acumulados, regras do `FeedState`, reconexão do `runFeed` com o último
+    cursor, rollback atômico sem publicação e persistência após reinício.
+  - 3 testes de ponta a ponta com o **processo real do Hive Gateway**:
+    cliente graphql-ws → gateway → graphql-ws → subgraph, com `details.label`
+    resolvido no subgraph catalog. Cobre late joiner, exclusão, queda abrupta
+    da conexão (`terminate`) com retomada por `after` (confirmada pela métrica
+    `resumeStarts`), rajada de 30 mutations concorrentes, histórico expirado
+    → SNAPSHOT, reinício do subgraph com commits durante a queda, e
+    `activeFeeds = 0` / `busListeners = 0` ao final.
+- `docker compose up`: subgraphs + gateway em containers, `npm run client` e
+  `npm run demo` contra `localhost:4000`, dados preservados no volume entre
+  execuções e reinício do container dos subgraphs com o cliente conectado.
+  (Neste sandbox a imagem foi construída com o CA do proxy local injetado
+  fora do repositório; o `Dockerfile` versionado não foi alterado.)
 
-Os testes incluem estado antigo no cache, replay paginado, exclusões,
-duplicatas, reordenação, detecção de lacunas por checkpoint, mudanças durante
-bootstrap, cliente tardio, retomada, retenção expirada, isolamento por escopo,
-rollback atômico, persistência após reinício, multipart em chunks de um byte e
-resolução de referência de entidade no segundo subgraph.
+## Latência medida (`npm run bench`)
 
-## Limite da validação
+Mesma máquina; clientes e subgraphs no mesmo processo Node, gateway em outro.
+Os números servem para comparar configurações, não como capacidade.
 
-A execução do Router com response caching e federated subscriptions foi
-tentada. O binário recusou habilitar os recursos por não haver uma chave/licença
-GraphOS disponível neste ambiente. Portanto **cache Redis e deduplicação reais
-do Router não foram verificados de ponta a ponta**. Não confundir os testes do
-protocolo e dos subgraphs com essa verificação.
+| Clientes | Commits/s | Seleção | Entregas | p50 | p95 | p99 | máx |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 50 | 50 | só evento | 12.500/12.500 | 6 ms | 14 ms | 23 ms | 35 ms |
+| 50 | 50 | `details { label }` | 12.500/12.500 | 146 ms | 295 ms | 307 ms | 319 ms |
+| 200 | 100 | só evento | 100.000/100.000 | 61 ms | 227 ms | 299 ms | 463 ms |
 
-Docker não está disponível neste ambiente; `docker compose up` não foi
-executado aqui. O arquivo Compose fornece a montagem para seu ambiente local.
+Todos os clientes convergiram para o head, sem reconexões. Na versão de
+`main`, só a espera do polling já soma até 500 ms antes de o evento sair do
+subgraph.
 
-Execute `npm run test:router` contra uma instância com os recursos habilitados.
-Esse script exige um snapshot cacheado, dois clientes convergentes, uma única
-subscription de origem, eventos posteriores, snapshot fresh e reconexão.
+## Não verificado
 
-## Publicação
-
-Destino autorizado pelo proprietário:
-https://github.com/tpisani/poc-graphql-subscriptions, branch `main`.
-O pacote ZIP entregue antes da publicação mantém o estado inicial do exemplo.
+- Apollo Router: federated subscriptions exigem licença GraphOS. O snippet em
+  `docs/design.md` não foi executado.
+- Bus distribuído / múltiplas réplicas do subgraph: só a interface está
+  pronta; o adaptador não foi implementado.

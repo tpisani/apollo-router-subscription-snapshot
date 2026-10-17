@@ -3,7 +3,6 @@ services:
     build: .
     environment:
       DB_PATH: /data/orders.sqlite
-      SNAPSHOT_TTL_MS: 120000
     volumes:
       - orders-data:/data
     ports:
@@ -14,28 +13,17 @@ services:
       interval: 2s
       timeout: 2s
       retries: 20
-  redis:
-    image: redis:7.4-alpine
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 2s
-      timeout: 2s
-      retries: 20
-  router:
-    image: ${ROUTER_IMAGE:-ghcr.io/apollographql/router:v2.10.0}
-    command: ["--config", "/dist/config/router.yaml", "--supergraph", "/dist/config/supergraph.graphql"]
+  gateway:
+    build: .
     environment:
-      APOLLO_KEY: ${APOLLO_KEY:?Preencha APOLLO_KEY no .env}
-      APOLLO_GRAPH_REF: ${APOLLO_GRAPH_REF:?Preencha APOLLO_GRAPH_REF no .env}
-      APOLLO_ROUTER_SUPERGRAPH_PATH: /dist/config/supergraph.graphql
-    volumes:
-      - ./router:/dist/config:ro
+      ORDERS_URL: http://subgraphs:4001/graphql
+      CATALOG_URL: http://subgraphs:4002/graphql
+      SUPERGRAPH_PATH: /tmp/supergraph.graphql
+    command: ["sh", "-c", "node scripts/compose.mjs /tmp/supergraph.graphql && exec node_modules/.bin/hive-gateway supergraph /tmp/supergraph.graphql -c gateway/gateway.config.mjs --host 0.0.0.0"]
     ports:
       - "127.0.0.1:4000:4000"
     depends_on:
       subgraphs:
-        condition: service_healthy
-      redis:
         condition: service_healthy
 volumes:
   orders-data:

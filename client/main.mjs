@@ -1,26 +1,20 @@
-import { setTimeout as delay } from 'node:timers/promises';
-import { Synchronizer, runSession } from './sync.mjs';
-import { apiFor, routerFrames } from './transport.mjs';
+import { FeedState, runFeed } from './feed-client.mjs';
+import { feedQuery, wsTransport } from './transport.mjs';
 
 const url = process.env.GRAPHQL_URL ?? 'http://localhost:4000/graphql';
-const scope = process.env.SCOPE_ID ?? 'loja-42';
-const sync = new Synchronizer(null,scope);
-let resume = false, stopping = false, controller;
-process.on('SIGINT',() => { stopping = true; controller?.abort(); });
-while (!stopping) {
-  controller = new AbortController();
-  // Watchdog também detecta conexões silenciosas sem checkpoints.
-  let lastFrame = Date.now();
-  const watchdog = setInterval(() => { if (Date.now()-lastFrame > 15000) controller.abort(); },1000);
-  sync.api = apiFor(url,scope,controller.signal);
-  let lastView = '';
-  try {
-    await runSession(sync,routerFrames(url,scope,controller.signal),{ resume, onUpdate: view => {
-      lastFrame = Date.now(); resume = true;
-      const serialized = JSON.stringify(view);
-      if (serialized !== lastView) { console.log(serialized); lastView = serialized; }
-    } });
-  } catch (error) { if (!stopping) console.error(`Reconectando: ${error.message}`); }
-  finally { clearInterval(watchdog); controller.abort(); }
-  if (!stopping) await delay(1000);
-}
+const scopeId = process.env.SCOPE_ID ?? 'loja-42';
+const state = new FeedState(scopeId);
+const transport = wsTransport(url, { query: feedQuery({ enrich: process.env.ENRICH === '1' }) });
+const controller = new AbortController();
+process.once('SIGINT', () => { controller.abort(); transport.dispose(); });
+
+await runFeed({
+  state, subscribe: transport.subscribe, signal: controller.signal,
+  onFrame: frame => {
+    const lag = frame.changes.map(change => Date.now() - change.committedAt);
+    const info = frame.kind === 'SNAPSHOT' ? 'snapshot' : `${frame.changes.length} mudança(s), latência ${lag.join('/')} ms`;
+    console.log(`[${frame.kind} → cursor ${state.cursor}] ${info}`);
+    console.log(JSON.stringify(state.view().orders));
+  },
+  onError: (error, attempt) => console.error(`Reconectando (tentativa ${attempt + 1}) a partir do cursor ${state.cursor}: ${error.message}`)
+});

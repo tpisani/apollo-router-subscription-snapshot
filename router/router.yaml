@@ -1,0 +1,24 @@
+# Perfil de estudo, baseado na configuração do Router 2.10.
+supergraph:
+  listen: 0.0.0.0:4000
+  path: /graphql
+subscription:
+  enabled: true
+  # Deduplicação permanece no padrão habilitado. Não usamos cursor por cliente aqui.
+  mode:
+    passthrough:
+      subgraphs:
+        orders:
+          path: /graphql
+          protocol: graphql_ws
+          heartbeat_interval: 5s
+response_cache:
+  enabled: true
+  subgraph:
+    all:
+      enabled: true
+      ttl: 60s
+      redis:
+        urls: [redis://redis:6379]
+include_subgraph_errors:
+  all: true

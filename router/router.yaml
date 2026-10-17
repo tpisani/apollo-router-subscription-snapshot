@@ -1,0 +1,33 @@
+# Apollo Router 2.10 (exige licença GraphOS para subscriptions federadas e
+# response cache). Validado com `router config validate`; não executado sem licença.
+supergraph:
+  listen: 0.0.0.0:4100
+  path: /graphql
+subscription:
+  enabled: true
+  # Padrão do Router, explícito aqui: o protocolo foi desenhado para conviver com
+  # a deduplicação, pois orderEvents(scopeId) não tem estado por cliente.
+  deduplication:
+    enabled: true
+  mode:
+    passthrough:
+      subgraphs:
+        orders:
+          path: /graphql
+          protocol: graphql_ws
+          heartbeat_interval: 5s
+response_cache:
+  enabled: true
+  subgraph:
+    all:
+      enabled: true
+      # Fallback. O subgraph sempre envia Cache-Control; o max-age de cada resposta
+      # decide (60 s para a base compartilhada, 1 dia para minCursor, 1 ano para
+      # intervalos fechados, no-store para mutations e erros).
+      ttl: 60s
+      redis:
+        urls: [redis://redis:6379]
+# Necessário para o cliente receber CURSOR_EXPIRED / NOT_YET. Em produção,
+# exponha só os códigos previstos.
+include_subgraph_errors:
+  all: true

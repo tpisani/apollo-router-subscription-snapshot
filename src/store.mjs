@@ -1,14 +1,20 @@
 import { DatabaseSync } from 'node:sqlite';
 
-export class FeedError extends Error {
+export class SyncError extends Error {
   constructor(message, code) { super(message); this.code = code; }
 }
 
 const STATUSES = ['PENDING', 'PAID', 'SHIPPED'];
 const plain = rows => rows.map(row => ({ ...row }));
+export const MAX_PAGE = 500;
 
-// Projeção + log de eventos na mesma transação. O log é a fonte de replay;
-// onCommit só é chamado depois do COMMIT, então nunca publica algo que não persistiu.
+// Projeção + log na mesma transação. onCommit só roda depois do COMMIT.
+//
+// As leituras têm contratos que não mudam com o tempo, para que qualquer
+// camada possa cachear a resposta sem torná-la falsa:
+//   snapshot(scope, minCursor) -> "um estado consistente em algum cursor >= minCursor"
+//   changes(scope, after, through) -> "os eventos (after, through]"; exige through <= head,
+//     então o intervalo já está fechado e é imutável.
 export class Store {
   constructor(path = ':memory:', { onCommit = () => {}, clock = Date.now } = {}) {
     this.db = new DatabaseSync(path);
@@ -34,12 +40,12 @@ export class Store {
       event: this.db.prepare('INSERT INTO events(scope, seq, payload) VALUES (?, ?, ?)'),
       advance: this.db.prepare('UPDATE scopes SET head = ? WHERE id = ?'),
       live: this.db.prepare('SELECT id, version, status FROM orders WHERE scope = ? AND deleted = 0 ORDER BY id'),
-      range: this.db.prepare('SELECT payload FROM events WHERE scope = ? AND seq > ? AND seq <= ? ORDER BY seq LIMIT ?')
+      range: this.db.prepare('SELECT payload FROM events WHERE scope = ? AND seq > ? AND seq <= ? ORDER BY seq')
     };
   }
 
   #scope(scope) {
-    if (typeof scope !== 'string' || !scope || scope.length > 100) throw new FeedError('Escopo inválido', 'BAD_USER_INPUT');
+    if (typeof scope !== 'string' || !scope || scope.length > 100) throw new SyncError('Escopo inválido', 'BAD_USER_INPUT');
     this.q.ensure.run(scope);
     return this.q.scope.get(scope);
   }
@@ -54,12 +60,12 @@ export class Store {
 
   change(scope, id, status, deleted = false) {
     if (typeof id !== 'string' || !id || (!deleted && !STATUSES.includes(status))) {
-      throw new FeedError('Pedido/status inválido', 'BAD_USER_INPUT');
+      throw new SyncError('Pedido/status inválido', 'BAD_USER_INPUT');
     }
     const change = this.#transaction(() => {
       const { head } = this.#scope(scope);
       const current = this.q.order.get(scope, id);
-      if (deleted && (!current || current.deleted)) throw new FeedError('Pedido inexistente', 'NOT_FOUND');
+      if (deleted && (!current || current.deleted)) throw new SyncError('Pedido inexistente', 'NOT_FOUND');
       const seq = head + 1;
       const order = { id, version: (current?.version ?? 0) + 1, status: status ?? current.status };
       const change = { scopeId: scope, cursor: String(seq), operation: deleted ? 'DELETE' : 'UPSERT', order, committedAt: this.clock() };
@@ -79,32 +85,49 @@ export class Store {
     });
   }
 
-  // Ponto de entrada do feed: devolve o que falta para o cliente alcançar o head,
-  // lido numa única transação. Replay quando o histórico cobre o cursor e a
-  // diferença é pequena; caso contrário um snapshot (mais barato que milhares de eventos).
-  catchUp(scope, after, maxReplay = 1000) {
+  changes(scope, after, through) {
+    const a = Number(after), t = Number(through);
     return this.#transaction(() => {
       const { head, floor } = this.#scope(scope);
-      const from = after == null ? null : Number(after);
-      if (from !== null && (!Number.isSafeInteger(from) || from < 0)) throw new FeedError('Cursor inválido', 'BAD_USER_INPUT');
-      // Cursor acima do head: banco recriado ou cursor de outro ambiente. Reinicia o cliente.
-      const replayable = from !== null && from >= floor && from <= head && head - from <= maxReplay;
-      if (!replayable) {
-        return { kind: 'SNAPSHOT', scopeId: scope, cursor: String(head), orders: plain(this.q.live.all(scope)), changes: [] };
+      if (![a, t].every(Number.isSafeInteger) || a < 0 || t < a || t - a > MAX_PAGE) {
+        throw new SyncError(`Intervalo inválido (máximo ${MAX_PAGE} eventos)`, 'BAD_USER_INPUT');
       }
-      const changes = this.q.range.all(scope, from, head, maxReplay).map(row => JSON.parse(row.payload));
-      return { kind: 'CHANGES', scopeId: scope, cursor: String(head), orders: null, changes };
+      // Pedir além do head tornaria a resposta mutável; com réplicas defasadas isso
+      // acontece de verdade, e o cliente só tenta de novo.
+      if (t > head) throw new SyncError(`Cursor ${t} ainda não disponível (head ${head})`, 'NOT_YET');
+      if (a < floor) throw new SyncError('Histórico expirado; use um snapshot mais novo', 'CURSOR_EXPIRED');
+      const events = this.q.range.all(scope, a, t).map(row => JSON.parse(row.payload));
+      return { scopeId: scope, after: String(a), through: String(t), events };
     });
   }
 
   prune(scope, through) {
     this.#transaction(() => {
       const { head } = this.#scope(scope);
-      if (!Number.isSafeInteger(through) || through < 0 || through > head) throw new FeedError('Prune inválido', 'BAD_USER_INPUT');
+      if (!Number.isSafeInteger(through) || through < 0 || through > head) throw new SyncError('Prune inválido', 'BAD_USER_INPUT');
       this.db.prepare('DELETE FROM events WHERE scope = ? AND seq <= ?').run(scope, through);
       this.db.prepare('UPDATE scopes SET floor = MAX(floor, ?) WHERE id = ?').run(through, scope);
     }, true);
   }
 
   close() { this.db.close(); }
+}
+
+// Cache interno do subgraph. Serve qualquer snapshot que satisfaça minCursor; só
+// lê o banco quando o que tem é antigo demais ou expirou. Nunca devolve cursor < minCursor.
+export class SnapshotCache {
+  constructor(store, ttlMs = 120_000, clock = Date.now) {
+    this.store = store; this.ttlMs = ttlMs; this.clock = clock; this.entries = new Map(); this.reads = 0;
+  }
+  get(scope, minCursor = 0) {
+    const entry = this.entries.get(scope);
+    if (entry && entry.expires > this.clock() && Number(entry.value.cursor) >= minCursor) return structuredClone(entry.value);
+    this.reads++;
+    const value = this.store.snapshot(scope);
+    if (Number(value.cursor) < minCursor) {
+      throw new SyncError(`Cursor ${minCursor} ainda não disponível (head ${value.cursor})`, 'NOT_YET');
+    }
+    this.entries.set(scope, { value, expires: this.clock() + this.ttlMs });
+    return structuredClone(value);
+  }
 }

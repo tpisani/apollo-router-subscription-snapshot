@@ -13,6 +13,8 @@ services:
       interval: 2s
       timeout: 2s
       retries: 20
+
+  # Hive Gateway (MIT): roda sem licença. graphql-ws/SSE para clientes.
   gateway:
     build: .
     environment:
@@ -25,5 +27,60 @@ services:
     depends_on:
       subgraphs:
         condition: service_healthy
+
+  # Emula a deduplicação de subscriptions e (no pior caso) o cache de queries do
+  # Router, em multipart. Ver scripts/edge.mjs.
+  edge:
+    build: .
+    environment:
+      UPSTREAM_URL: http://gateway:4000/graphql
+      EDGE_PORT: 4010
+    command: ["node", "scripts/edge.mjs"]
+    ports:
+      - "127.0.0.1:4010:4010"
+    depends_on:
+      - gateway
+
+  # Perfil apollo: o Apollo Router de verdade (exige APOLLO_KEY/APOLLO_GRAPH_REF
+  # com licença para subscriptions federadas e response cache).
+  #   docker compose --profile apollo up --build -d
+  supergraph:
+    profiles: [apollo]
+    build: .
+    environment:
+      ORDERS_URL: http://subgraphs:4001/graphql
+      CATALOG_URL: http://subgraphs:4002/graphql
+    command: ["node", "scripts/compose.mjs", "/supergraph/supergraph.graphql"]
+    volumes:
+      - supergraph:/supergraph
+  redis:
+    profiles: [apollo]
+    image: redis:7.4-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+  router:
+    profiles: [apollo]
+    image: ${ROUTER_IMAGE:-ghcr.io/apollographql/router:v2.10.0}
+    command: ["--config", "/dist/config/router.yaml", "--supergraph", "/supergraph/supergraph.graphql"]
+    environment:
+      APOLLO_KEY: ${APOLLO_KEY:-}
+      APOLLO_GRAPH_REF: ${APOLLO_GRAPH_REF:-}
+    volumes:
+      - ./router:/dist/config:ro
+      - supergraph:/supergraph:ro
+    ports:
+      - "127.0.0.1:4100:4100"
+    depends_on:
+      supergraph:
+        condition: service_completed_successfully
+      subgraphs:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   orders-data:
+  supergraph:

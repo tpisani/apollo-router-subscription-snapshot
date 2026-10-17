@@ -2,118 +2,77 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startStack } from '../scripts/stack.mjs';
-import { FeedState, runFeed } from '../client/feed-client.mjs';
-import { feedQuery, graphql, wsTransport } from '../client/transport.mjs';
+import { verify } from '../scripts/verify.mjs';
+import { Synchronizer, runSync } from '../client/sync.mjs';
+import { queryApi, transports } from '../client/transport.mjs';
 
-async function until(predicate, message, ms = 5000) {
+async function until(predicate, message, ms = 10_000) {
   for (const end = Date.now() + ms; Date.now() < end; await delay(10)) if (predicate()) return;
   throw new Error(`Timeout: ${message}`);
 }
 
-// Um cliente real: graphql-ws -> Hive Gateway -> graphql-ws -> subgraph orders,
-// com details.label resolvido no subgraph catalog a cada frame.
-function connect(url, scopeId) {
-  const state = new FeedState(scopeId);
-  const transport = wsTransport(url, { query: feedQuery({ enrich: true }) });
+let stack;
+test.before(async () => { stack = await startStack({ checkpointMs: 300, queueLimit: 50 }); });
+test.after(async () => { await stack?.stop(); });
+
+test('edge com deduplicação e cache de tudo: estado inicial consistente e ao vivo', { timeout: 60_000 }, async () => {
+  const before = { ...stack.edge.metrics };
+  const result = await verify({
+    url: stack.edge.url, transport: 'multipart', metrics: async () => stack.subgraphs.metrics,
+    prune: (scope, through) => stack.subgraphs.store.prune(scope, through)
+  });
+  console.log(JSON.stringify(result));
+  assert.ok(stack.edge.metrics.deduplicatedJoins > before.deduplicatedJoins, 'houve entrada em stream deduplicado');
+  assert.ok(stack.edge.metrics.cacheHits > before.cacheHits, 'houve respostas servidas do cache');
+  await until(() => stack.subgraphs.metrics.activeLiveStreams === 0 && stack.subgraphs.metrics.hubListeners === 0, 'streams liberados');
+});
+
+test('mesmo protocolo direto no Hive Gateway (graphql-ws, sem dedup nem cache)', { timeout: 60_000 }, async () => {
+  const result = await verify({ url: stack.url, transport: 'ws', enrich: true, expectDedup: false, expectStaleCache: false });
+  assert.ok(result.head > 40);
+});
+
+test('reinício do subgraph com clientes no stream deduplicado', { timeout: 60_000 }, async () => {
+  const scopeId = `restart-${Date.now()}`;
+  const url = stack.edge.url;
   const controller = new AbortController();
-  const frames = []; const errors = []; const latencies = [];
-  const done = runFeed({ state, subscribe: transport.subscribe, signal: controller.signal, wait: () => 50,
-    onFrame: frame => { frames.push(frame); for (const change of frame.changes) latencies.push(Date.now() - change.committedAt); },
-    onError: error => errors.push(error) });
-  return { state, transport, frames, errors, latencies,
-    async close() { controller.abort(); await transport.dispose(); await done; } };
-}
-
-test('gateway federado: snapshot, ao vivo, late joiner, retomada por cursor e enriquecimento', { timeout: 60_000 }, async () => {
-  const stack = await startStack();
-  const { url, subgraphs } = stack;
-  const scopeId = 'loja-e2e';
-  const write = (id, status) => graphql(url, `mutation($s: ID!, $id: ID!, $v: String!) {
-    upsertOrder(scopeId: $s, id: $id, status: $v) { cursor } }`, { s: scopeId, id, v: status });
-  const remove = id => graphql(url, 'mutation($s: ID!, $id: ID!) { deleteOrder(scopeId: $s, id: $id) { cursor } }', { s: scopeId, id });
-  const truth = async () => {
-    const { ordersSnapshot } = await graphql(url, `query($s: ID!) { ordersSnapshot(scopeId: $s) { cursor orders { id version status details { label } } } }`, { s: scopeId });
-    return ordersSnapshot;
-  };
-  const clients = [];
-  try {
-    await write('1', 'PENDING'); await write('2', 'PENDING');
-    const a = connect(url, scopeId); clients.push(a);
-    await until(() => a.state.cursor === 2, 'snapshot inicial');
-    assert.equal(a.frames[0].kind, 'SNAPSHOT');
-    assert.equal(a.state.orders.get('1').details.label, 'Pedido 1', 'campo do subgraph catalog no frame');
-
-    await write('1', 'PAID');
-    await until(() => a.state.orders.get('1').status === 'PAID', 'evento ao vivo');
-    assert.equal(a.frames.at(-1).kind, 'CHANGES');
-
-    const b = connect(url, scopeId); clients.push(b); // Late joiner.
-    await until(() => b.state.cursor === 3, 'late joiner');
-    await remove('2');
-    await until(() => [a, b].every(c => c.state.cursor === 4), 'exclusão nos dois clientes');
-    assert.deepEqual(a.state.view(), b.state.view());
-    assert.equal(a.state.orders.has('2'), false);
-
-    // Derruba a conexão de A (sem aviso) e escreve enquanto ele está fora.
-    const resumesBefore = subgraphs.metrics.resumeStarts;
-    const framesBefore = a.frames.length;
-    a.transport.client.terminate();
-    await write('3', 'PENDING'); await write('3', 'SHIPPED');
-    await until(() => a.state.cursor === 6, 'retomada após queda');
-    assert.equal(subgraphs.metrics.resumeStarts, resumesBefore + 1, 'reconexão usou after, não snapshot');
-    assert.ok(a.frames.slice(framesBefore).every(frame => frame.kind === 'CHANGES'), 'sem SNAPSHOT na retomada');
-    assert.ok(a.errors.length >= 1);
-
-    // Rajada: todos convergem para o estado do banco, sem lacunas.
-    await Promise.all(Array.from({ length: 30 }, (_, i) => write(String(i % 5), ['PENDING', 'PAID', 'SHIPPED'][i % 3])));
-    const final = await truth();
-    await until(() => clients.every(c => String(c.state.cursor) === final.cursor), 'convergência após rajada');
-    for (const client of clients) assert.deepEqual(client.state.view(), { cursor: final.cursor, orders: final.orders });
-
-    const p95 = values => values.sort((x, y) => x - y)[Math.floor(values.length * 0.95)];
-    console.log(`latência commit→cliente via gateway: p95 ${p95(a.latencies)} ms em ${a.latencies.length} eventos`);
-    assert.ok(p95(b.latencies) < 500, 'entrega ao vivo deve ficar bem abaixo de 500 ms localmente');
-  } finally {
-    await Promise.all(clients.map(client => client.close()));
-    await until(() => subgraphs.metrics.activeFeeds === 0 && subgraphs.bus.size === 0, 'feeds liberados no subgraph').catch(error => {
-      assert.fail(`${error.message}: ${JSON.stringify(subgraphs.metrics)}`);
-    }).finally(() => stack.stop());
-  }
-});
-
-test('histórico expirado na reconexão vira SNAPSHOT', { timeout: 30_000 }, async () => {
-  const stack = await startStack();
-  const { url, subgraphs } = stack;
-  const scopeId = 'loja-expirada';
-  let client;
-  try {
-    subgraphs.store.change(scopeId, '1', 'PENDING');
-    client = connect(url, scopeId);
-    await until(() => client.state.cursor === 1, 'snapshot');
-    client.transport.client.terminate();
-    subgraphs.store.change(scopeId, '1', 'PAID'); subgraphs.store.change(scopeId, '2', 'PAID');
-    subgraphs.store.prune(scopeId, 3);
-    await until(() => client.state.cursor === 3, 'recuperação');
-    assert.equal(client.frames.at(-1).kind, 'SNAPSHOT');
-    assert.equal(client.state.orders.get('1').status, 'PAID');
-  } finally { await client?.close(); await stack.stop(); }
-});
-
-test('reinício do subgraph: o feed continua sem perder commits', { timeout: 30_000 }, async () => {
-  const stack = await startStack();
-  const scopeId = 'loja-restart';
-  let client;
+  const syncs = [0, 1, 2].map(() => new Synchronizer({ scopeId, api: queryApi(url, scopeId) }));
+  const runs = syncs.map(sync => runSync({ sync, signal: controller.signal, wait: () => 100,
+    connect: signal => transports.multipart(url, scopeId, { signal }) }));
   try {
     stack.subgraphs.store.change(scopeId, '1', 'PENDING');
-    client = connect(stack.url, scopeId);
-    await until(() => client.state.cursor === 1, 'snapshot');
+    await until(() => syncs.every(s => s.synced && s.cursor === 1), 'sincronizados');
     await stack.restartSubgraphs();
-    // Commits logo após o reinício, antes de o feed ser restabelecido.
     stack.subgraphs.store.change(scopeId, '1', 'PAID'); stack.subgraphs.store.change(scopeId, '2', 'SHIPPED');
-    await until(() => client.state.cursor === 3, 'recuperação após reinício', 15_000);
-    const fresh = stack.subgraphs.store.snapshot(scopeId);
-    assert.deepEqual(client.state.view().orders.map(({ details, ...order }) => order), fresh.orders);
-    stack.subgraphs.store.change(scopeId, '2', null, true);
-    await until(() => client.state.cursor === 4 && !client.state.orders.has('2'), 'ao vivo após reinício');
-  } finally { await client?.close(); await stack.stop(); }
+    await until(() => syncs.every(s => s.synced && s.cursor === 3), 'recuperados após reinício', 20_000);
+    const truth = stack.subgraphs.store.snapshot(scopeId);
+    for (const sync of syncs) assert.deepEqual(sync.view().orders, truth.orders);
+  } finally { controller.abort(); await Promise.all(runs); }
+});
+
+test('rajada maior que a fila do stream: conflação em checkpoint, cliente recupera pelo histórico', { timeout: 60_000 }, async () => {
+  const scopeId = `slow-${Date.now()}`;
+  const url = stack.edge.url;
+  const sync = new Synchronizer({ scopeId, api: queryApi(url, scopeId) });
+  const controller = new AbortController();
+  let stalls = 0;
+  const conflationsBefore = stack.subgraphs.metrics.conflations;
+  const run = runSync({ sync, signal: controller.signal, wait: () => 100,
+    connect: async function* (signal) {
+      for await (const frame of transports.multipart(url, scopeId, { signal })) {
+        // Consumidor que trava de vez em quando; com fila pequena no subgraph,
+        // não há perda para o cliente, só frames trocados por checkpoints.
+        if (stalls++ % 5 === 0) await delay(50);
+        yield frame;
+      }
+    } });
+  try {
+    await until(() => sync.synced, 'sincronizado');
+    for (let i = 0; i < 300; i++) stack.subgraphs.store.change(scopeId, String(i % 9), ['PENDING', 'PAID', 'SHIPPED'][i % 3]);
+    const truth = stack.subgraphs.store.snapshot(scopeId);
+    await until(() => sync.cursor === Number(truth.cursor), 'alcançou o head');
+    assert.deepEqual(sync.view().orders, truth.orders);
+    assert.ok(stack.subgraphs.metrics.conflations > conflationsBefore, 'a fila do stream deveria ter transbordado');
+    assert.ok(sync.stats.pages > 0, 'eventos descartados no stream vieram do histórico');
+  } finally { controller.abort(); await run; }
 });

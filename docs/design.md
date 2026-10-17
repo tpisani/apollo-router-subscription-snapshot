@@ -1,173 +1,205 @@
-# Decisões: feed em tempo real com retomada por cursor
+# Desenho: tempo real com deduplicação no Router e queries cacheáveis
 
-## Objetivo
+## Requisitos
 
-Levar cada commit ao cliente com a menor latência possível e com uma garantia
-simples: **o estado local é sempre igual ao estado do banco em algum cursor**,
-mesmo com quedas de rede, reinício do subgraph, clientes lentos ou entrando
-com o sistema já em movimento.
+1. **Conviver com a deduplicação de subscriptions do Apollo Router.** Clientes
+   com a mesma operação e as mesmas variáveis compartilham um único upstream.
+   Quem entra depois recebe só os frames seguintes; nada é reenviado na entrada.
+2. **Tolerar cache em qualquer query** (response cache do Router, CDN, cache
+   interno do subgraph), mesmo com TTLs longos ou configurados errado.
+3. **Estado inicial consistente e atual:** o cliente nunca mostra uma mistura
+   de épocas e não fica preso a um snapshot antigo vindo do cache.
+4. **Tempo real:** eventos ao vivo aplicados direto do stream, sem polling e
+   sem query no caminho quente.
 
-## O que mudou em relação à versão em `main`
+## Ideia central: separar fatos de "agora"
 
-| Tema | `main` | Este branch |
-| --- | --- | --- |
-| Origem dos eventos ao vivo | Cada subscription faz polling do SQLite a cada 500 ms | Push: commit → bus em memória → assinantes, sem polling |
-| Latência mínima | Até 500 ms só de espera no polling | Limitada pela rede e pelo gateway (ms) |
-| Bootstrap do cliente | Abre o stream, query de snapshot (cacheada), query de head, N páginas de histórico, depois o stream | Uma subscription: o servidor manda SNAPSHOT ou só os eventos que faltam, e continua ao vivo |
-| Reconexão | Repete snapshot/head/histórico por queries | `after: <cursor>` na própria subscription: um round trip |
-| Correção sem lacunas | No cliente (detecção de lacuna + replay por query) | No servidor por construção (registra no bus antes de ler o banco) e conferida no cliente |
-| Cliente lento | Não tratado | Fila limitada por assinante; estouro encerra com `SLOW_CONSUMER` e o cliente retoma pelo cursor |
-| Conexão morta | Watchdog de 15 s sem frames | Ping/pong graphql-ws a cada 5 s, timeout de 3 s |
-| Gateway | Apollo Router (subscriptions e response cache exigem licença GraphOS; não foi verificado) | Hive Gateway (MIT), roda em CI, testado de ponta a ponta |
-| Cache do snapshot | Router + cache interno, com snapshot propositalmente antigo | Sem cache no caminho do feed: o snapshot sai do banco na mesma transação do cursor |
+Uma resposta cacheada só fica errada quando afirma algo que muda com o tempo,
+como "o estado atual" ou "o head". Então nenhuma query responde isso. Toda query
+responde um **fato** que, depois de verdadeiro, continua verdadeiro:
 
-A versão em `main` foi desenhada para tolerar um snapshot servido de cache e
-para ser compatível com deduplicação de subscriptions no Router (todas as
-assinaturas com as mesmas variáveis). Isso tem um custo direto na latência
-(polling) e no tempo até o primeiro estado correto (várias queries em série).
-Aqui a prioridade é a entrega em tempo real, então o desenho inverte as escolhas.
+| Campo | Contrato | Cache-Control do subgraph | Por que é seguro cachear |
+| --- | --- | --- | --- |
+| `ordersSnapshot(scopeId, minCursor: "0")` | um estado consistente em algum cursor ≥ 0 | `public, max-age=60` | qualquer snapshot já gerado satisfaz o contrato; o TTL só limita quanto replay ele exige |
+| `ordersSnapshot(scopeId, minCursor: T)` | um estado consistente em algum cursor ≥ T | `public, max-age=86400` | idem; e a chave é nova a cada T, então nenhum valor antigo a satisfaz |
+| `orderChanges(scopeId, after, through)` | os eventos `(after, through]`; exige `through ≤ head` | `public, max-age=31536000, immutable` | um intervalo fechado do log nunca muda |
+| mutations, erros (`NOT_YET`, `CURSOR_EXPIRED`) | — | `no-store` | o Router não cacheia erros |
+| `Order.label` (catalog) | dado de referência | `public, max-age=300` | consistência eventual, separado do estado versionado |
 
-## Protocolo
+**O "agora" vem só do stream**, que nenhum cache de query toca:
 
 ```graphql
-subscription Feed($scopeId: ID!, $after: ID) {
-  orderFeed(scopeId: $scopeId, after: $after) {
-    scopeId kind cursor
-    orders { id version status }                       # só em SNAPSHOT
-    changes { cursor operation committedAt order { id version status } }
-  }
+subscription OrderEvents($scopeId: ID!) {
+  orderEvents(scopeId: $scopeId) { scopeId kind cursor change { ... } }
 }
 ```
 
-1. Primeira conexão: `after: null` → frame `SNAPSHOT` com o estado e o cursor
-   lidos na mesma transação.
-2. Cada commit seguinte → frame `CHANGES` com o(s) evento(s) contíguo(s).
-3. Reconexão: `after: <último cursor aplicado>` → `CHANGES` com só o que
-   falta, ou `SNAPSHOT` se o histórico não cobrir o cursor (expirado por
-   retenção, mais de `MAX_REPLAY` eventos atrás, ou cursor acima do head
-   porque o banco foi recriado).
-4. O cliente aplica eventos com `seq = cursor + 1`, ignora `seq <= cursor`
-   (reentrega) e trata qualquer outra coisa como erro, reconectando do
-   último cursor válido.
+- `CHANGE`: empurrado no commit (bus em memória, sem polling).
+- `CHECKPOINT`: o head durável, a cada `CHECKPOINT_MS` (padrão 250 ms), lido
+  uma vez por escopo e não por assinante. É a prova de que o stream está vivo,
+  o alvo de sincronização e o detector de perdas.
+
+A subscription tem só `scopeId`, então todos os clientes do escopo mandam as
+mesmas variáveis e o Router deduplica. Um late joiner que pega o stream no meio
+não perde nada, porque o passado não vem do stream.
+
+## Algoritmo do cliente (`client/sync.mjs`)
 
 ```mermaid
 sequenceDiagram
   participant C as Cliente
-  participant G as Hive Gateway
+  participant R as Router (dedup + cache)
   participant O as Subgraph orders
-  participant B as Bus
-  participant D as SQLite
-  C->>G: orderFeed(scopeId, after)
-  G->>O: graphql-ws
-  O->>B: registra listener (antes de ler)
-  O->>D: catchUp(after): SNAPSHOT ou eventos até o head
-  O-->>C: frame inicial
-  Note over O,D: mutation: projeção + evento + head num BEGIN IMMEDIATE
-  D-->>B: depois do COMMIT
-  B-->>O: evento (sem nova leitura no banco)
-  O-->>C: CHANGES
+  C->>R: subscription orderEvents(scopeId)
+  R-->>C: (upstream já aberto: entra no meio)
+  par em paralelo
+    C->>R: ordersSnapshot(minCursor: "0")
+    R-->>C: HIT: base antiga no cursor C (render provisório)
+  and
+    O-->>R: CHECKPOINT head = T
+    R-->>C: CHECKPOINT T (alvo)
+  end
+  loop páginas alinhadas até T
+    C->>R: orderChanges(after, through ≤ T)
+    R-->>C: HIT ou MISS, ambos corretos (intervalo fechado)
+  end
+  Note over C: cursor = T, synced = true
+  O-->>C: CHANGE T+1, T+2... aplicados direto, sem query
 ```
 
-### Por que não há lacuna entre o frame inicial e o ao vivo
+1. Abre o stream e, **em paralelo**, pede a base compartilhada
+   `ordersSnapshot(minCursor: "0")`, a chave com mais chance de estar no cache.
+   Se ela chegar primeiro, a tela renderiza na hora como **provisória**: um
+   estado consistente, mas possivelmente antigo.
+2. O primeiro frame (CHECKPOINT ou CHANGE) dá o alvo `T`: o stream provou que o
+   head é ao menos `T`, e todo commit depois disso vai chegar por ele.
+3. Aplica `(C, T]` por páginas de `orderChanges`. As páginas são alinhadas em
+   múltiplos de 100, para que clientes em cursores diferentes peçam as mesmas
+   chaves e as páginas completas fiquem compartilhadas no cache.
+4. Atalhos de recuperação, ambos com uma **chave nova** (`minCursor = T`):
+   - se `T - C > maxReplay` (padrão 2000), pede um snapshot em vez de replay;
+   - se o histórico de `C` foi podado (`CURSOR_EXPIRED`), idem.
+5. Com `cursor ≥ T`: **synced**. Daqui em diante:
+   - `CHANGE` com `seq = cursor + 1`: aplicado direto do frame, sem query;
+   - `seq ≤ cursor`: ignorado (reentrega/sobreposição);
+   - `CHECKPOINT` ou `CHANGE` acima de `cursor + 1`: perda detectada,
+     catch-up pelo histórico até o novo alvo.
+6. Queda do stream ou silêncio maior que `stallMs` (padrão 5 s, ou 20
+   checkpoints): reconecta com backoff, mantendo o estado. A retomada é o mesmo
+   catch-up do passo 3, sem snapshot.
 
-O feed se registra no bus **antes** de ler o banco. Todo commit anterior à
-leitura está no resultado de `catchUp`; todo commit posterior ao registro
-chega pelo bus; a sobreposição é descartada por `seq <= cursor`. Isso continua
-válido com um bus distribuído (Redis, NATS, `LISTEN/NOTIFY`), desde que a
-publicação aconteça depois do commit e preserve a ordem por escopo.
+### Por que o estado inicial nunca fica defasado
 
-O bus é só um sinal de baixa latência; a fonte de verdade é o log. Se o bus
-perder ou reordenar algo, o feed detecta a lacuna (`GAP`), encerra e o cliente
-retoma pelo log com `after`.
+- **Consistência:** o estado local só muda por (a) um snapshot inteiro, lido
+  com o cursor na mesma transação, ou (b) eventos com `seq = cursor + 1`.
+  Logo, ele é sempre o estado exato do banco em `cursor`.
+- **Atualidade:** "synced" só é declarado com `cursor ≥ T`, onde `T` vem do
+  stream e não de um cache. Um cache pode atrasar a *base* (mais replay), nunca
+  o *alvo*.
+- **Cache antigo não prende o cliente:** toda nova busca usa uma chave que
+  nenhuma resposta antiga satisfaz: `minCursor = T` ou um intervalo que
+  termina em `T`. E toda resposta que existe numa dessas chaves é verdadeira.
+- **Defesas contra um cache quebrado:** se um cache devolver um snapshot com
+  `cursor < minCursor`, ou uma página com buraco, o cliente rejeita, em vez
+  de aceitar dados errados.
 
-### Por que `after` na subscription
+Teste de propriedade em `tests/sync.test.mjs`:
+- **Condições:** 25 sementes, cache eterno que ignora `Cache-Control`, frames
+  perdidos, duplicados e reordenados, clientes entrando e reconectando em
+  qualquer momento, retenção podando o log.
+- **Verificação:** todos terminam no estado exato do banco.
+- **Sensibilidade:** introduzir de propósito um bug (aplicar `CHANGE` com
+  lacuna) faz o teste falhar na primeira semente.
 
-Com o cursor na subscription, o servidor decide o caminho mais barato
-(replay ou snapshot) e o cliente chega ao estado correto com **um** round trip,
-em vez de snapshot + head + páginas de histórico. O custo é que assinaturas
-com cursores diferentes não são deduplicáveis por um gateway. Aqui isso não
-pesa: o fan-out acontece em memória no subgraph a partir do mesmo evento já
-serializado, sem leitura extra no banco por assinante.
+### Garantias e o que elas custam
 
-Quando o subgraph cai, o Hive Gateway reassina o upstream sozinho, com as
-variáveis originais. O cliente nem percebe a queda. O servidor reenvia a partir
-do `after` original (ou um SNAPSHOT); o cliente ignora o que já aplicou. Isso
-é correto, mas pode reenviar mais do que o necessário: o custo é limitado por
-`MAX_REPLAY`.
+| Momento | Garantia |
+| --- | --- |
+| Antes do primeiro frame | estado consistente, possivelmente antigo (`synced: false`) |
+| Bootstrap | até `CHECKPOINT_MS` + o catch-up. Medido com 50 clientes partindo de uma base 400 eventos atrás: p50 491 ms |
+| Ao vivo | latência do push. Medido: p50 5 ms, p99 11 ms (50 clientes, 50 commits/s) |
+| Perda no stream (bus, fila cheia) | corrigida no próximo frame (≤ `CHECKPOINT_MS`) pelo histórico |
+| Retomada | um catch-up a partir do cursor, sem snapshot |
 
-## Latência: o enriquecimento federado é o gargalo
+O intervalo do checkpoint é o único botão entre bootstrap rápido e custo:
+4 frames pequenos por segundo por cliente e 4 leituras de head por segundo por
+escopo ativo (não por cliente). Para muitos escopos num banco compartilhado,
+derive o checkpoint do head em memória e leia o banco com menos frequência.
 
-`OrderState.details` é a entidade `Order` com campos do subgraph catalog. O
-gateway resolve esses campos **para cada frame de cada assinante** (uma busca
-`_entities` por frame). Medido com `npm run bench` (mesma máquina, 50 clientes,
-50 commits/s):
+## Servidor
 
-| Seleção | p50 | p95 | p99 |
-| --- | --- | --- | --- |
-| Só campos do evento | 6 ms | 14 ms | 23 ms |
-| Com `details { label }` | 146 ms | 295 ms | 307 ms |
-
-Recomendação: no caminho quente, use campos que o subgraph produtor grava no
-próprio evento. Busque dados de referência (rótulos, catálogo) uma vez, por
-query ou cache no cliente, ou desnormalize no evento se precisam chegar junto.
-O schema mantém `details` para mostrar que a federação funciona em subscriptions
-e para deixar esse custo visível.
-
-## Contrapressão e limites
-
-- Fila por assinante (`QUEUE_LIMIT`, padrão 1000 eventos). Enquanto o
-  consumidor está ocupado, os eventos acumulados saem num único frame
-  `CHANGES` (lote natural, sem atraso artificial). Se a fila estourar, o feed
-  termina com `SLOW_CONSUMER` e o cliente retoma pelo cursor: memória limitada
-  no servidor e nenhuma perda para o cliente.
-- `MAX_REPLAY` (padrão 1000): além disso, a retomada vira SNAPSHOT.
-- `return()` do iterator libera o listener imediatamente, mesmo com o feed
-  parado esperando o próximo commit. Um async generator só liberaria no
-  próximo evento, e escopos sem tráfego vazariam listeners. Os testes conferem
-  `activeFeeds = 0` e `busListeners = 0` depois que os clientes saem.
-
-## Consistência
-
-- Projeção, evento e head mudam numa única transação `BEGIN IMMEDIATE`;
-  `onCommit` só publica depois do `COMMIT`. Uma falha não publica nada.
-- Cada escopo tem uma sequência contígua própria (`seq = head + 1`). A regra
-  `cursor + 1` não vale para offsets globais ou streams filtrados.
-- `committedAt` é o relógio do subgraph; o benchmark só é exato porque cliente
-  e servidor rodam na mesma máquina.
-
-## Escalar além do POC
-
-- **Subgraph com réplicas:** troque o SQLite por um banco compartilhado
-  (PostgreSQL) e o `Bus` por um adaptador distribuído com a mesma interface
-  (`subscribe(scope, fn)` / `publish(change)`), alimentado depois do commit
-  (outbox/CDC ou `LISTEN/NOTIFY`). O feed não muda.
-- **Gateway com réplicas:** não guarda estado do feed; qualquer instância
-  atende a retomada porque o cursor vem do cliente.
-- **Estado do cliente:** persista estado **e** cursor juntos (por exemplo, em
-  IndexedDB) para retomar após recarregar a página sem um novo SNAPSHOT.
-- **Autorização:** `scopeId` aqui é só um seletor. Em produção, valide o
-  escopo no `subscribe` com base na identidade da conexão.
+- **Escrita:** projeção, evento e head numa transação `BEGIN IMMEDIATE`. O
+  evento só é publicado no bus depois do `COMMIT`.
+- **Hub (`src/live.mjs`):** um timer de checkpoint por escopo com assinantes;
+  ele morre com o último assinante. Com a deduplicação no Router, normalmente
+  há um único assinante por escopo e por instância do Router.
+- **Fila por stream com conflação:** se o consumidor não acompanha
+  (`QUEUE_LIMIT`, padrão 1000), os frames pendentes viram um único
+  `CHECKPOINT` com o head. O stream fica com perda; o cliente não, porque o
+  checkpoint acima do cursor dispara o catch-up. Desconectar seria pior sob
+  deduplicação: o Router derrubaria todos os clientes daquele upstream.
+- **`SnapshotCache`:** devolve qualquer snapshot em memória que satisfaça
+  `minCursor` e só lê o banco quando o que tem é antigo demais, ou quando o TTL
+  interno expirou.
+- **Bus distribuído:** se o adaptador (Redis, NATS, `LISTEN/NOTIFY`) perder
+  ou reordenar mensagens, o cliente corrige pelo log; o bus nunca é a fonte de
+  verdade.
 
 ## Apollo Router
 
-O subgraph é graphql-ws padrão; o protocolo funciona atrás do Apollo Router
-em modo passthrough. Federated subscriptions no Router exigem licença GraphOS,
-por isso não foi verificado aqui:
+`router/router.yaml` (validado com `router config validate` do Router 2.10.0):
+- `subscription.deduplication.enabled: true` (o padrão, explícito);
+- passthrough `graphql_ws` para o subgraph orders;
+- `response_cache` com Redis; o TTL vem do `Cache-Control` de cada resposta do
+  subgraph;
+- `include_subgraph_errors`, para o cliente receber `CURSOR_EXPIRED` e `NOT_YET`.
 
-```yaml
-subscription:
-  enabled: true
-  mode:
-    passthrough:
-      subgraphs:
-        orders:
-          path: /graphql
-          protocol: graphql_ws
-```
+Pontos de atenção:
+- **Headers entram na chave de deduplicação.** Clientes com `Authorization`
+  diferentes não compartilham upstream. `deduplication.ignored_headers` só é
+  seguro se esses headers não mudam o que o subgraph pode enviar.
+- **Autorização por escopo** precisa valer no `subscribe` e também nas
+  queries, porque a chave de cache não carrega a identidade a menos que você
+  a inclua.
+- **Réplicas do Router:** cada instância tem o seu upstream deduplicado. A
+  retomada funciona em qualquer uma, porque o cursor está no cliente.
+- **Réplicas de leitura defasadas no subgraph:** `NOT_YET` (alvo acima do
+  head local) não é cacheado. O cliente reconecta e tenta de novo.
 
-Cuidado com a deduplicação do Router: dois clientes com as mesmas variáveis
-(por exemplo, `after: null` no mesmo escopo) compartilham um único upstream.
-Quem entra depois não recebe o SNAPSHOT inicial, recebe `CHANGES`, o cliente
-rejeita isso como lacuna e reconecta, e pode cair no mesmo upstream de novo.
-Desligue a deduplicação (`subscription.enable_deduplication: false`) para este
-feed. Ele foi feito para fan-out no subgraph, não no gateway.
+## Emulação usada nos testes (`scripts/edge.mjs`)
+
+As subscriptions federadas e o response cache do Router exigem licença
+GraphOS. O binário recusa iniciar sem ela ("license violation: Federated
+subscriptions"). Para testar sem licença, `scripts/edge.mjs` fica na frente do
+Hive Gateway e reproduz os dois comportamentos que importam:
+- **Deduplicação:** mesma operação + variáveis = um upstream; quem entra
+  depois só recebe os frames seguintes.
+- **Cache de queries no pior caso:** toda query bem-sucedida fica cacheada
+  para sempre, ignorando `Cache-Control`. Se o protocolo funciona aqui,
+  funciona com o TTL que o Router respeita.
+
+Ele expõe subscriptions no multipart do Router (`subscriptionSpec="1.0"`). É
+uma emulação, não o Router; `npm run test:router` roda o mesmo cenário
+(`scripts/verify.mjs`) contra um Router de verdade.
+
+## Enriquecimento federado
+
+`OrderState.details` traz `label` do subgraph catalog. Sem deduplicação, o
+gateway resolve isso por assinante e por frame. Com 50 clientes a 50 commits/s,
+a latência p50 foi de 47 ms (p99 92 ms); numa rodada anterior, mais carregada,
+chegou a 371 ms. Com deduplicação, é resolvido uma vez por evento para todos:
+p50 7 ms (p99 13 ms). O campo continua com cache de entidade próprio
+(`max-age=300`), separado do estado versionado.
+
+## Evolução neste branch
+
+- `main` (versão do Codex): subscription compartilhada, mas com polling de 500 ms no
+  subgraph e bootstrap em várias queries (snapshot, `orderHead` sem cache,
+  páginas). A dependência de um `orderHead` sem cache é o que este desenho
+  elimina: o head vem do stream.
+- Commit `15a917e` deste branch: `orderFeed(scopeId, after)`, com push e o
+  estado inicial dentro da subscription. Tem uma latência de bootstrap menor,
+  mas é **incompatível com a deduplicação**: um late joiner não recebe o
+  SNAPSHOT e entra em loop de reconexão.
+- Atual: push no stream compartilhado e recuperação por queries com
+  contratos imutáveis.

@@ -5,19 +5,14 @@ export const ordersSDL = `
   type Order @key(fields: "id", resolvable: false) { id: ID! }
 
   enum Operation { UPSERT DELETE }
-  enum FrameKind {
-    "Substitui todo o estado local do escopo."
-    SNAPSHOT
-    "Eventos contíguos a partir do cursor anterior do cliente."
-    CHANGES
-  }
+  enum FrameKind { CHANGE CHECKPOINT }
 
   "Estado versionado: pertence ao mesmo commit do evento/snapshot."
   type OrderState {
     id: ID!
     version: Int!
     status: String!
-    "Campos de outros subgraphs, resolvidos na entrega (consistência eventual)."
+    "Campos de outros subgraphs (consistência eventual, cache próprio)."
     details: Order!
   }
   type Change {
@@ -29,29 +24,30 @@ export const ordersSDL = `
     committedAt: Float!
   }
   type Snapshot { scopeId: ID!, cursor: ID!, orders: [OrderState!]! }
-  type FeedFrame {
-    scopeId: ID!
-    kind: FrameKind!
-    "Posição do cliente depois de aplicar o frame. Reenvie em after ao reconectar."
-    cursor: ID!
-    "Presente somente em SNAPSHOT."
-    orders: [OrderState!]
-    changes: [Change!]!
-  }
+  type ChangePage { scopeId: ID!, after: ID!, through: ID!, events: [Change!]! }
+  type LiveFrame { scopeId: ID!, kind: FrameKind!, cursor: ID!, change: Change }
 
   type Query {
-    ordersSnapshot(scopeId: ID!): Snapshot!
+    """
+    Um estado consistente em algum cursor >= minCursor. Qualquer resposta
+    continua verdadeira para sempre, então pode vir de cache. minCursor = "0" é
+    a chave compartilhada (pode estar antiga); um minCursor vindo do stream
+    força uma base recente com uma chave nova.
+    """
+    ordersSnapshot(scopeId: ID!, minCursor: ID! = "0"): Snapshot!
+    """
+    Eventos (after, through], com through <= head e no máximo 500 eventos.
+    Intervalo fechado: imutável e cacheável indefinidamente.
+    """
+    orderChanges(scopeId: ID!, after: ID!, through: ID!): ChangePage!
   }
   type Mutation {
     upsertOrder(scopeId: ID!, id: ID!, status: String!): Change!
     deleteOrder(scopeId: ID!, id: ID!): Change!
   }
   type Subscription {
-    """
-    Feed com retomada. Sem after: SNAPSHOT e depois CHANGES ao vivo.
-    Com after: só o que falta (ou SNAPSHOT se o histórico não cobrir) e depois ao vivo.
-    """
-    orderFeed(scopeId: ID!, after: ID): FeedFrame!
+    "Stream compartilhado do escopo, sem argumentos por cliente (deduplicável)."
+    orderEvents(scopeId: ID!): LiveFrame!
   }
 `;
 

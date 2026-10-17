@@ -82,7 +82,19 @@ Ambiente: Linux, Node.js 22.22.0, Hive Gateway 2.15.2, Apollo Router 2.10.0
   `router config validate router/router-plugin.yaml` passa, com e sem
   `RETAIN_ENABLED`; um campo desconhecido no plugin é rejeitado pelo schema.
 - **Sem chave**, o binário para na inicialização: `license violation ...
-  ["Federated subscriptions"]`, como esperado.
+  ["Federated subscriptions"]`, como esperado. Com uma chave inválida de
+  propósito, o GraphOS responde `ACCESS_DENIED`: o binário no host alcança o
+  uplink pelo proxy da sessão. `npm run test:router-real` falha nesse ponto com
+  a mensagem do Router, sem deixar processos.
+- **Imagem Docker** (`router-plugin/Dockerfile`, Rust 1.97): compila e
+  `config validate` passa dentro dela. O perfil `apollo-plugin` sobe todos os
+  serviços, mas aqui, sem proxy nos containers, os routers ficam tentando buscar
+  a licença (`fetch failed from all 2 uplink endpoints`) e não abrem a porta. Por
+  isso o teste real na sessão é o `test:router-real`, com o binário no host.
+- **Limite do plano gratuito**, lido no código do Router 2.10.5: `RateLimit` por
+  instância no router service, 503 `ROUTER_FREE_PLAN_RATE_LIMIT_REACHED`. O
+  roteiro passa só as subscriptions pelos routers e para com essa mensagem se o
+  limite for atingido.
 
 ## Benchmark (`npm run bench`, 10 s)
 
@@ -114,10 +126,10 @@ de estatísticas no mesmo benchmark. O estado inteiro custa ~1,8× em banda aqui
 
 ## Não verificado
 
-- **O binário com GraphOS:** sem chave, ele não inicia. Prontos para rodar com
-  ela: `docker compose --profile apollo-plugin up --build -d` (3 routers com o
-  plugin, 1 sem, balanceador) e `npm run test:router-scale` (com `KILL_CMD` para
-  derrubar uma instância). O `TestHarness` cobre uma instância; várias instâncias
+- **O binário com GraphOS:** sem chave, ele não inicia. Pronto para rodar com
+  ela: `npm run test:router-real` (3 routers com o plugin, 1 sem, balanceador e
+  uma instância derrubada no meio), ou o perfil `apollo-plugin` do compose numa
+  máquina local. O `TestHarness` cobre uma instância; várias instâncias
   do Router de verdade e o response cache com Redis ainda não rodaram.
 - **Balanceador real** (ALB, NGINX, Envoy): o do teste é um round-robin simples
   com streaming. Num LB real, confira o timeout de ociosidade (maior que o frame

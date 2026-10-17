@@ -17,7 +17,8 @@
     "test": "node --test --test-concurrency=1 --test-timeout=120000 tests/*.test.mjs",
     "test:router": "GRAPHQL_URL=${GRAPHQL_URL:-http://localhost:4100/graphql} node scripts/verify.mjs",
     "test:router-scale": "node scripts/verify-router-scale.mjs",
-    "test:router-harness": "node scripts/router-harness.mjs"
+    "test:router-harness": "node scripts/router-harness.mjs",
+    "test:router-real": "node scripts/router-real.mjs"
   },
   "dependencies": {
     "@apollo/composition": "^2.12.0",

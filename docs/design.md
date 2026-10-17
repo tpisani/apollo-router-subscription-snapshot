@@ -167,9 +167,9 @@ podem estar até ~0,5 s atrás do placar. Por isso gols ficam só no placar.
 
 - **Apollo Router com licença não executado aqui:** o plugin rodou no pipeline do
   Router pelo `TestHarness` do crate (deduplicação, WebSocket e multipart reais,
-  uma instância). Várias instâncias do binário com GraphOS, o balanceador e o
-  response cache estão prontos (`--profile apollo-plugin`,
-  `npm run test:router-scale`), mas dependem da chave.
+  uma instância). Várias instâncias do binário com GraphOS atrás de um
+  balanceador estão prontas (`npm run test:router-real`), mas dependem da chave;
+  o response cache com Redis (`--profile apollo`) também.
 - **Plugin sem suporte da Apollo:** é preciso recompilar a cada versão do Router e
   acompanhar a forma interna do stream de subscription.
 - **Identidade:** o edge usa a identidade só na chave. Num Router real, a

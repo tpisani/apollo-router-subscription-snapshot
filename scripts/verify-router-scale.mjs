@@ -5,8 +5,15 @@ import { createSync, runSync, statsFromWire } from '../client/sync.mjs';
 import { graphql, snapshotApi, transports } from '../client/transport.mjs';
 import { playGenerator } from '../src/sports.mjs';
 
+// O plano gratuito do GraphOS limita requisições por instância (503
+// ROUTER_FREE_PLAN_RATE_LIMIT_REACHED); cada subscription conta uma vez.
+const RATE_LIMIT = 'ROUTER_FREE_PLAN_RATE_LIMIT_REACHED';
+let rateLimited = null;
 async function until(predicate, message, ms = 10_000) {
-  for (const end = Date.now() + ms; Date.now() < end; await delay(20)) if (await predicate()) return;
+  for (const end = Date.now() + ms; Date.now() < end; await delay(20)) {
+    if (rateLimited) throw new Error(`Limite de requisições do plano gratuito atingido (${RATE_LIMIT}): ${rateLimited}`);
+    if (await predicate()) return;
+  }
   throw new Error(`Timeout: ${message}`);
 }
 const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
@@ -18,18 +25,23 @@ const monotonic = list => list.every((v, i) => i === 0 || v >= list[i - 1]);
 //   lbUrl:      um balanceador na frente delas (sem afinidade)
 //   plainUrl:   uma instância igual, com a retenção desligada (comparação)
 //   kill():     opcional, derruba uma instância no meio do jogo
+//   direct:     opcional, { scores, stats } dos subgraphs: mutations e snapshots vão
+//               direto para eles e só as subscriptions passam pelo Router, para
+//               caber no limite de requisições do plano gratuito
 // Roda também contra o emulador (tests/router-scale.test.mjs), com edges no lugar dos routers.
-export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, kill, headers = {}, log = () => {} }) {
+export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, kill, direct, headers = {}, log = () => {} }) {
+  rateLimited = null;
   const run = Math.random().toString(36).slice(2, 7);
   const result = {};
   const clients = [];
 
   const mutations = url => {
-    const call = async (query, variables, field) => (await graphql(url, query, variables, undefined, headers))[field];
+    const call = async (query, variables, field, target = url) => (await graphql(target, query, variables, undefined, headers))[field];
+    const scores = direct?.scores ?? url; const stats = direct?.stats ?? url;
     return {
-      startPeriod: async matchId => (await call('mutation($m: ID!) { startPeriod(matchId: $m, period: 1) { version } }', { m: matchId }, 'startPeriod')).version,
-      goal: async matchId => (await call('mutation($m: ID!) { scoreGoal(matchId: $m, side: HOME) { version } }', { m: matchId }, 'scoreGoal')).version,
-      plays: async (matchId, events) => call('mutation($m: ID!, $e: [StatEventInput!]!) { recordStats(matchId: $m, events: $e) }', { m: matchId, e: events }, 'recordStats')
+      startPeriod: async matchId => (await call('mutation($m: ID!) { startPeriod(matchId: $m, period: 1) { version } }', { m: matchId }, 'startPeriod', scores)).version,
+      goal: async matchId => (await call('mutation($m: ID!) { scoreGoal(matchId: $m, side: HOME) { version } }', { m: matchId }, 'scoreGoal', scores)).version,
+      plays: async (matchId, events) => call('mutation($m: ID!, $e: [StatEventInput!]!) { recordStats(matchId: $m, events: $e) }', { m: matchId, e: events }, 'recordStats', stats)
     };
   };
   const api = mutations(lbUrl);
@@ -40,7 +52,8 @@ export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, 
     const controller = new AbortController();
     const c = { syncs: {}, seen: {}, retained: {}, errors: [], runs: [], t0: Date.now(), syncedAt: {} };
     for (const channel of channels) {
-      const sync = createSync(channel, { matchId, api: snapshotApi(url, channel, matchId, { headers: clientHeaders }) });
+      const snapshotUrl = direct ? direct[channel === 'scoreboard' ? 'scores' : 'stats'] : url;
+      const sync = createSync(channel, { matchId, api: snapshotApi(snapshotUrl, channel, matchId, { headers: clientHeaders }) });
       c.syncs[channel] = sync; c.seen[channel] = []; c.retained[channel] = 0;
       c.runs.push(runSync({ sync, signal: controller.signal, wait: () => 100, stallMs: 5000,
         connect: signal => transports.multipart(url, channel, matchId, { signal, headers: clientHeaders,
@@ -49,7 +62,7 @@ export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, 
           if (view.version !== null) c.seen[channel].push(view.version);
           if (view.synced) c.syncedAt[channel] ??= Date.now();
         },
-        onError: error => c.errors.push(error) }));
+        onError: error => { c.errors.push(error); if (error.message.includes(RATE_LIMIT)) rateLimited ??= error.message.slice(0, 200); } }));
     }
     c.synced = () => Object.values(c.syncs).every(s => s.synced);
     c.close = async () => { controller.abort(); await Promise.all(c.runs); };
@@ -156,7 +169,7 @@ export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, 
         await delay(50);
       }
       await until(() => list.every(c => c.syncs.scoreboard.version === scoreVersion && c.syncs.stats.version === statsVersion), 'todos na versão final', 20_000);
-      const truth = await snapshotApi(lbUrl, 'stats', matchId, { headers }).snapshot(statsVersion);
+      const truth = await snapshotApi(direct?.stats ?? lbUrl, 'stats', matchId, { headers }).snapshot(statsVersion);
       for (const c of list) {
         for (const channel of ['scoreboard', 'stats']) assert.ok(monotonic(c.seen[channel]), `${channel} regrediu`);
         assert.equal(c.syncs.stats.version, truth.version);

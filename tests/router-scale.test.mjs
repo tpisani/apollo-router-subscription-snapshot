@@ -15,7 +15,9 @@ test('roteiro de várias instâncias com retenção (emulador)', { timeout: 120_
   try {
     const result = await verifyRouterScale({
       lbUrl: stack.balancer.url, routerUrls: stack.edges.map(e => e.url), plainUrl: plain.url,
-      metrics: async () => stack.subgraphs.metrics, kill: () => stack.killEdge(1)
+      metrics: async () => stack.subgraphs.metrics, kill: () => stack.killEdge(1),
+      // Como no Router real com o plano gratuito: só as subscriptions passam pelas instâncias.
+      direct: { scores: `http://127.0.0.1:${stack.subgraphs.ports.scores}/graphql`, stats: `http://127.0.0.1:${stack.subgraphs.ports.stats}/graphql` }
     });
     console.log(JSON.stringify(result));
   } finally {

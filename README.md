@@ -97,8 +97,9 @@ npm run test:router      # o mesmo cenário dos testes, contra o Router
 
 ```bash
 npm run test:router-harness   # sem licença: o plugin no pipeline do Router (TestHarness)
-docker compose --profile apollo-plugin up --build -d   # com APOLLO_KEY: 3 routers + balanceador
-npm run test:router-scale     # várias instâncias, late joiner, identidade, queda e limpeza
+npm run test:router-real      # com APOLLO_KEY/APOLLO_GRAPH_REF: 3 routers + balanceador no host
+# ou, numa máquina local, pelo compose:
+docker compose --profile apollo-plugin up --build -d && npm run test:router-scale
 ```
 
 Detalhes em [`router-plugin/README.md`](router-plugin/README.md).

@@ -63,7 +63,20 @@ verificação violaria a licença (ELv2), então o teste real precisa da chave.
    repositório. Numa sessão do Claude Code na web: menu do ambiente → Editar →
    variáveis de ambiente; uma sessão nova já as recebe. Localmente: `.env` (fora
    do git) ou `export`.
-3. Suba o perfil e rode o roteiro:
+3. Rode o teste de verdade, com o binário no host:
+
+```bash
+npm run test:router-real          # compila se preciso, sobe tudo, roda o roteiro e derruba
+```
+
+   Sobe os subgraphs Node, 3 routers com o plugin (4101–4103), 1 sem retenção
+   (4104) e o balanceador (4200), roda `scripts/verify-router-scale.mjs` com uma
+   instância derrubada no meio do jogo (`KILL=0` desliga) e encerra tudo. É o
+   caminho numa sessão na nuvem: os processos herdam o proxy e a CA da sessão, e
+   os containers do Docker não; dentro deles o Router não alcança o GraphOS e
+   fica tentando buscar a licença, sem abrir a porta.
+
+   Numa máquina local, o mesmo pelo compose:
 
 ```bash
 docker compose --profile apollo-plugin up --build -d
@@ -72,7 +85,13 @@ npm run test:router-scale
 KILL_CMD="docker compose --profile apollo-plugin stop router-b" npm run test:router-scale
 ```
 
-O perfil sobe:
+**Limite do plano gratuito:** o Router limita as requisições por instância
+(503 `ROUTER_FREE_PLAN_RATE_LIMIT_REACHED`); cada subscription conta uma vez,
+mesmo durando minutos. Por isso o roteiro manda as mutations e as queries de base
+direto aos subgraphs e só as subscriptions passam pelos routers (cerca de 40 por
+instância no total). Se o limite for atingido, o roteiro para e diz isso.
+
+O perfil do compose sobe (portas iguais às do `test:router-real`):
 
 | Serviço | Porta | Papel |
 | --- | --- | --- |

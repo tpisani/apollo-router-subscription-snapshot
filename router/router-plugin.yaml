@@ -2,8 +2,10 @@
 # Exige APOLLO_KEY/APOLLO_GRAPH_REF com subscriptions federadas (inclusas no plano
 # gratuito do GraphOS). Sem response cache, para depender só de subscriptions.
 #   RETAIN_ENABLED=false desliga a retenção (instância de comparação).
+#   ROUTER_LISTEN / ROUTER_HEALTH_LISTEN: várias instâncias no mesmo host
+#   (scripts/router-real.mjs).
 supergraph:
-  listen: 0.0.0.0:4100
+  listen: ${env.ROUTER_LISTEN:-0.0.0.0:4100}
   path: /graphql
 subscription:
   enabled: true
@@ -35,5 +37,5 @@ plugins:
 include_subgraph_errors:
   all: true
 health_check:
-  listen: 0.0.0.0:8088
+  listen: ${env.ROUTER_HEALTH_LISTEN:-0.0.0.0:8088}
   enabled: true

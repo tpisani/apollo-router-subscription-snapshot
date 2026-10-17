@@ -16,13 +16,14 @@ const freePort = () => new Promise(resolve => {
 // como processo separado + edge (dedup e cache, ver edge.mjs) na frente do gateway.
 export async function startStack({ edge: edgeOptions = {}, ...options } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'realtime-stack-'));
-  const config = { dbPath: join(dir, 'db.sqlite'), ordersPort: 0, catalogPort: 0, host: '127.0.0.1', ...options };
+  const config = { dataDir: dir, ports: { scores: 0, catalog: 0, stats: 0 }, host: '127.0.0.1', ...options };
   let subgraphs = await startSubgraphs(config);
-  Object.assign(config, { ordersPort: subgraphs.ports.orders, catalogPort: subgraphs.ports.catalog });
+  config.ports = { ...subgraphs.ports };
   const supergraph = join(dir, 'supergraph.graphql');
   writeFileSync(supergraph, composeSupergraph({
-    ordersUrl: `http://127.0.0.1:${subgraphs.ports.orders}/graphql`,
-    catalogUrl: `http://127.0.0.1:${subgraphs.ports.catalog}/graphql`
+    scoresUrl: `http://127.0.0.1:${subgraphs.ports.scores}/graphql`,
+    catalogUrl: `http://127.0.0.1:${subgraphs.ports.catalog}/graphql`,
+    statsUrl: `http://127.0.0.1:${subgraphs.ports.stats}/graphql`
   }));
   const port = await freePort();
   const gateway = spawn(process.execPath, ['node_modules/@graphql-hive/gateway/dist/bin.js', 'supergraph', supergraph,

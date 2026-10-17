@@ -1,5 +1,5 @@
 {
-  "name": "realtime-feed-example",
+  "name": "realtime-sports-example",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
     "client": "node client/main.mjs",
     "demo": "node scripts/demo.mjs",
     "bench": "node scripts/bench.mjs",
-    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "test": "node --test --test-concurrency=1 --test-timeout=120000 tests/*.test.mjs",
     "test:router": "GRAPHQL_URL=${GRAPHQL_URL:-http://localhost:4100/graphql} node scripts/verify.mjs"
   },
   "dependencies": {

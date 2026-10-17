@@ -22,13 +22,19 @@ export async function startEdge({ upstream, port = 0, host = '127.0.0.1', heartb
   const metrics = { cacheHits: 0, cacheMisses: 0, upstreamSubscriptions: 0, subscribers: 0, deduplicatedJoins: 0 };
   const ws = createClient({ url: upstream.replace(/^http/, 'ws'), webSocketImpl: WebSocket, lazy: true, retryAttempts: 5 });
 
+  // Upstreams abertos por operação: com deduplicação, um por (operação, variáveis).
+  const currentMetrics = () => {
+    const upstreamByOperation = {};
+    for (const stream of streams.values()) upstreamByOperation[stream.operation] = (upstreamByOperation[stream.operation] ?? 0) + 1;
+    return { ...metrics, cacheEntries: cache.size, upstreamByOperation };
+  };
   const part = json => `\r\ncontent-type: application/json\r\n\r\n${JSON.stringify(json)}\r\n--graphql`;
 
   function join(key, body, res) {
     let stream = streams.get(key);
     if (stream) metrics.deduplicatedJoins++;
     else {
-      stream = { subscribers: new Set() };
+      stream = { subscribers: new Set(), operation: body.operationName ?? 'anônima' };
       streams.set(key, stream); metrics.upstreamSubscriptions++;
       const close = (last) => {
         if (streams.get(key) !== stream) return;
@@ -58,14 +64,16 @@ export async function startEdge({ upstream, port = 0, host = '127.0.0.1', heartb
   const server = createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/metrics') {
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ ...metrics, cacheEntries: cache.size })); return;
+      res.end(JSON.stringify(currentMetrics())); return;
     }
     if (req.method !== 'POST' || req.url !== '/graphql') { res.writeHead(404); res.end(); return; }
     try {
       let raw = '';
       for await (const chunk of req) raw += chunk;
       const body = JSON.parse(raw);
-      const operation = getOperationAST(parse(body.query), body.operationName)?.operation;
+      const ast = getOperationAST(parse(body.query), body.operationName);
+      const operation = ast?.operation;
+      body.operationName ??= ast?.name?.value;
       const key = JSON.stringify([body.query, body.variables ?? {}, body.operationName ?? null]);
       if (operation === 'subscription') return join(key, body, res);
       if (operation === 'query' && cacheQueries && cache.has(key)) {
@@ -87,7 +95,7 @@ export async function startEdge({ upstream, port = 0, host = '127.0.0.1', heartb
   await new Promise(resolve => server.listen(port, host, resolve));
   const url = `http://${host}:${server.address().port}/graphql`;
   return {
-    url, metrics, cache,
+    url, get metrics() { return currentMetrics(); }, cache,
     async close() {
       for (const stream of streams.values()) stream.dispose();
       server.closeAllConnections?.();

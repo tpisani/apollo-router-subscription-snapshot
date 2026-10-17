@@ -5,14 +5,19 @@ supergraph:
   path: /graphql
 subscription:
   enabled: true
-  # Padrão do Router, explícito aqui: o protocolo foi desenhado para conviver com
-  # a deduplicação, pois orderEvents(scopeId) não tem estado por cliente.
+  # Padrão do Router, explícito aqui: scoreboardUpdates(matchId) e
+  # statsUpdates(matchId) não têm estado por cliente, então um upstream por
+  # canal e partida atende todos os clientes.
   deduplication:
     enabled: true
   mode:
     passthrough:
       subgraphs:
-        orders:
+        scores:
+          path: /graphql
+          protocol: graphql_ws
+          heartbeat_interval: 5s
+        stats:
           path: /graphql
           protocol: graphql_ws
           heartbeat_interval: 5s
@@ -21,13 +26,13 @@ response_cache:
   subgraph:
     all:
       enabled: true
-      # Fallback. O subgraph sempre envia Cache-Control; o max-age de cada resposta
-      # decide (60 s para a base compartilhada, 1 dia para minCursor, 1 ano para
-      # intervalos fechados, no-store para mutations e erros).
+      # Fallback. Os subgraphs sempre enviam Cache-Control; o max-age de cada
+      # resposta decide (2 s placar e 5 s estatísticas na chave minVersion 0,
+      # 60 s com minVersion, 1 h para times e elencos, no-store em mutations e erros).
       ttl: 60s
       redis:
         urls: [redis://redis:6379]
-# Necessário para o cliente receber CURSOR_EXPIRED / NOT_YET. Em produção,
+# Necessário para o cliente receber NOT_YET / BAD_USER_INPUT. Em produção,
 # exponha só os códigos previstos.
 include_subgraph_errors:
   all: true

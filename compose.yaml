@@ -2,14 +2,17 @@ services:
   subgraphs:
     build: .
     environment:
-      DB_PATH: /data/orders.sqlite
+      DATA_DIR: /data
+      # Simula a partida m1 (lances e gols); remova para usar só as mutations.
+      SIMULATE: m1
     volumes:
-      - orders-data:/data
+      - match-data:/data
     ports:
       - "127.0.0.1:4001:4001"
       - "127.0.0.1:4002:4002"
+      - "127.0.0.1:4003:4003"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4003/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 2s
       timeout: 2s
       retries: 20
@@ -18,8 +21,9 @@ services:
   gateway:
     build: .
     environment:
-      ORDERS_URL: http://subgraphs:4001/graphql
+      SCORES_URL: http://subgraphs:4001/graphql
       CATALOG_URL: http://subgraphs:4002/graphql
+      STATS_URL: http://subgraphs:4003/graphql
       SUPERGRAPH_PATH: /tmp/supergraph.graphql
     command: ["sh", "-c", "node scripts/compose.mjs /tmp/supergraph.graphql && exec node_modules/.bin/hive-gateway supergraph /tmp/supergraph.graphql -c gateway/gateway.config.mjs --host 0.0.0.0"]
     ports:
@@ -48,8 +52,9 @@ services:
     profiles: [apollo]
     build: .
     environment:
-      ORDERS_URL: http://subgraphs:4001/graphql
+      SCORES_URL: http://subgraphs:4001/graphql
       CATALOG_URL: http://subgraphs:4002/graphql
+      STATS_URL: http://subgraphs:4003/graphql
     command: ["node", "scripts/compose.mjs", "/supergraph/supergraph.graphql"]
     volumes:
       - supergraph:/supergraph
@@ -82,5 +87,5 @@ services:
         condition: service_healthy
 
 volumes:
-  orders-data:
+  match-data:
   supergraph:

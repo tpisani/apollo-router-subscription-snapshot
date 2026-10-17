@@ -1,19 +1,20 @@
 import { createServer } from 'node:http';
+import { join } from 'node:path';
 import { parse, validate, execute, subscribe, GraphQLError } from 'graphql';
 import { buildSubgraphSchema } from '@apollo/subgraph';
 import { WebSocketServer } from 'ws';
 import { useServer } from 'graphql-ws/use/ws';
-import { Store, SnapshotCache } from './store.mjs';
-import { Hub, LiveStream } from './live.mjs';
-import { ordersSDL, catalogSDL } from './schemas.mjs';
+import { Store, SnapshotCache, SyncError } from './store.mjs';
+import { ChannelHub, LiveStream } from './channels.mjs';
+import { scoresSDL, statsSDL, catalogSDL } from './schemas.mjs';
+import { MATCHES, initialScoreboard, initialStats, scoreboardOps, applyStatEvents } from './sports.mjs';
 
-// TTLs que o subgraph declara ao Router via Cache-Control. Todos são seguros pelo
-// contrato do campo; o valor só decide quanto replay um cliente pode precisar.
+// TTLs que cada subgraph declara via Cache-Control. Todos são seguros pelo contrato
+// ">= minVersion"; o valor só decide quão antiga pode vir a base provisória.
 export const TTL = {
-  sharedSnapshot: 60,           // minCursor "0": base compartilhada, pode estar antiga
-  boundedSnapshot: 86_400,      // minCursor > 0: satisfaz o mínimo para sempre
-  changes: 31_536_000,          // intervalo fechado: imutável
-  catalog: 300                  // dado de referência, consistência eventual
+  scoreboardShared: 2, statsShared: 5,   // minVersion 0: chave compartilhada, render imediato
+  bounded: 60,                           // minVersion > 0: chave nova a cada versão pedida
+  catalog: 3600                          // times e elencos
 };
 
 function wrap(fn) {
@@ -23,70 +24,88 @@ function wrap(fn) {
   };
 }
 const hint = (context, seconds) => context?.cacheHints?.push(seconds);
-const withDetails = order => ({ ...order, details: { id: order.id } });
-const changeOut = change => ({ ...change, order: withDetails(change.order) });
+const minVersionOf = value => {
+  if (!Number.isSafeInteger(value) || value < 0) throw new SyncError('minVersion inválido', 'BAD_USER_INPUT');
+  return value;
+};
+const statsOut = state => ({ ...state, players: Object.entries(state.players).map(([id, p]) => ({ id, ...p })) });
 
-function parseCursor(value) {
-  const n = Number(value);
-  if (!Number.isSafeInteger(n) || n < 0) throw Object.assign(new Error('Cursor inválido'), { code: 'BAD_USER_INPUT' });
-  return n;
+function channelMetrics() {
+  return { commits: 0, snapshotRequests: 0, streamsOpened: 0, activeStreams: 0, framesEmitted: 0, framesSent: 0, merges: 0 };
 }
 
-export function createOrdersSchema({ store, snapshots, hub, metrics, queueLimit }) {
-  return buildSubgraphSchema([{ typeDefs: parse(ordersSDL), resolvers: {
+function liveField(hub, metrics, resolve) {
+  return {
+    subscribe: wrap((_, { matchId }) => {
+      if (typeof matchId !== 'string' || !matchId || matchId.length > 100) throw new SyncError('Partida inválida', 'BAD_USER_INPUT');
+      metrics.streamsOpened++; metrics.activeStreams++;
+      const stream = new LiveStream({ hub, key: matchId, onClose: () => metrics.activeStreams--, onMerge: () => metrics.merges++ });
+      return {
+        async next() { const result = await stream.next(); if (!result.done) metrics.framesSent++; return result; },
+        return: () => stream.return(),
+        throw: error => stream.throw(error),
+        [Symbol.asyncIterator]() { return this; }
+      };
+    }),
+    resolve
+  };
+}
+
+export function createScoresSchema({ store, snapshots, hub, metrics }) {
+  const mutate = (op) => wrap((_, args) => {
+    const change = store.update(args.matchId, state => scoreboardOps[op](state, args, store.clock()));
+    return change ? { matchId: args.matchId, version: change.version, state: change.state } : { matchId: args.matchId, ...store.read(args.matchId) };
+  });
+  return buildSubgraphSchema([{ typeDefs: parse(scoresSDL), resolvers: {
     Query: {
-      ordersSnapshot: wrap((_, { scopeId, minCursor }, context) => {
+      scoreboard: wrap((_, { matchId, minVersion }, context) => {
         metrics.snapshotRequests++;
-        const min = parseCursor(minCursor);
-        const snapshot = snapshots.get(scopeId, min);
-        hint(context, min === 0 ? TTL.sharedSnapshot : TTL.boundedSnapshot);
-        return { ...snapshot, orders: snapshot.orders.map(withDetails) };
-      }),
-      orderChanges: wrap((_, { scopeId, after, through }, context) => {
-        metrics.changeRequests++;
-        const page = store.changes(scopeId, after, through);
-        hint(context, TTL.changes);
-        return { ...page, events: page.events.map(changeOut) };
+        const min = minVersionOf(minVersion);
+        const doc = snapshots.get(matchId, min);
+        hint(context, min === 0 ? TTL.scoreboardShared : TTL.bounded);
+        return { matchId, version: doc.version, state: doc.state };
       })
     },
-    Mutation: {
-      upsertOrder: wrap((_, { scopeId, id, status }) => changeOut(store.change(scopeId, id, status))),
-      deleteOrder: wrap((_, { scopeId, id }) => changeOut(store.change(scopeId, id, null, true)))
-    },
-    Subscription: {
-      orderEvents: {
-        subscribe: wrap((_, { scopeId }) => {
-          store.head(scopeId); // Valida o escopo antes de abrir o stream.
-          metrics.liveStreamsOpened++; metrics.activeLiveStreams++;
-          const stream = new LiveStream({ hub, scopeId, queueLimit,
-            onClose: () => metrics.activeLiveStreams--, onConflate: () => metrics.conflations++ });
-          return {
-            async next() { const result = await stream.next(); if (!result.done) metrics.framesSent++; return result; },
-            return: () => stream.return(),
-            throw: error => stream.throw(error),
-            [Symbol.asyncIterator]() { return this; }
-          };
-        }),
-        resolve: frame => ({ ...frame, change: frame.change && changeOut(frame.change) })
-      }
-    }
+    Mutation: { startPeriod: mutate('startPeriod'), endPeriod: mutate('endPeriod'), scoreGoal: mutate('scoreGoal') },
+    Subscription: { scoreboardUpdates: liveField(hub, metrics, frame => frame) }
   } }]);
 }
 
-export function createCatalogSchema(metrics) {
+export function createStatsSchema({ store, snapshots, hub, metrics }) {
+  return buildSubgraphSchema([{ typeDefs: parse(statsSDL), resolvers: {
+    Query: {
+      matchStats: wrap((_, { matchId, minVersion }, context) => {
+        metrics.snapshotRequests++;
+        const min = minVersionOf(minVersion);
+        const doc = snapshots.get(matchId, min);
+        hint(context, min === 0 ? TTL.statsShared : TTL.bounded);
+        return { matchId, version: doc.version, state: statsOut(doc.state) };
+      })
+    },
+    Mutation: {
+      recordStats: wrap((_, { matchId, events }) => {
+        if (events.length > 1000) throw new SyncError('Lote grande demais', 'BAD_USER_INPUT');
+        return (store.update(matchId, state => applyStatEvents(state, events, matchId)) ?? store.read(matchId)).version;
+      })
+    },
+    Subscription: { statsUpdates: liveField(hub, metrics, frame => (frame.kind === 'STATE' ? { ...frame, state: statsOut(frame.state) } : frame)) }
+  } }]);
+}
+
+export function createCatalogSchema() {
+  const match = id => MATCHES[id] ?? null;
   return buildSubgraphSchema([{ typeDefs: parse(catalogSDL), resolvers: {
-    Query: { catalogHealth: () => 'ok' },
-    Order: {
-      __resolveReference: ({ id }, context) => {
-        metrics.catalogLookups++; hint(context, TTL.catalog);
-        return { id, label: `Pedido ${id}` };
-      }
-    }
+    Query: {
+      match: (_, { id }, context) => { hint(context, TTL.catalog); return match(id); },
+      matches: (_, __, context) => { hint(context, TTL.catalog); return Object.values(MATCHES); }
+    },
+    Match: { __resolveReference: ({ id }, context) => { hint(context, TTL.catalog); return match(id); } },
+    Team: { __resolveReference: ({ id }, context) => { hint(context, TTL.catalog); return Object.values(MATCHES).flatMap(m => [m.home, m.away]).find(t => t.id === id); } }
   } }]);
 }
 
 // Cache-Control por resposta = menor TTL entre os campos resolvidos. Sem dica,
-// com erro ou em mutation: no-store. Funciona com variáveis, aliases e fragmentos.
+// com erro ou em mutation: no-store.
 function graphqlHandler(schema, extra = () => false) {
   return async (req, res) => {
     if (req.method === 'GET' && req.url === '/health') { res.end('ok'); return; }
@@ -106,10 +125,7 @@ function graphqlHandler(schema, extra = () => false) {
       const result = errors.length ? { errors }
         : await execute({ schema, document, contextValue, variableValues: body.variables, operationName: body.operationName });
       const hints = contextValue.cacheHints;
-      if (!result.errors?.length && hints.length && Math.min(...hints) > 0) {
-        const maxAge = Math.min(...hints);
-        cacheControl = `public, max-age=${maxAge}${maxAge >= TTL.changes ? ', immutable' : ''}`;
-      }
+      if (!result.errors?.length && hints.length && Math.min(...hints) > 0) cacheControl = `public, max-age=${Math.min(...hints)}`;
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': cacheControl });
       res.end(JSON.stringify(result));
     } catch (error) {
@@ -123,35 +139,50 @@ const listen = (server, port, host) => new Promise((resolve, reject) => {
   server.once('error', reject); server.listen(port, host, () => resolve(server.address().port));
 });
 
+// Os três subgraphs num processo (por conveniência local), cada um com seu banco.
 export async function startSubgraphs({
-  dbPath = ':memory:', ordersPort = 4001, catalogPort = 4002, host = '0.0.0.0',
-  checkpointMs = 250, queueLimit = 1000, snapshotTtlMs = 120_000
+  dataDir = null, ports = { scores: 4001, catalog: 4002, stats: 4003 }, host = '0.0.0.0',
+  scoreboard = { checkpointMs: 1000 }, stats = { checkpointMs: 1000, coalesceMs: 500 }, snapshotTtlMs = 1000
 } = {}) {
-  const metrics = {
-    commits: 0, snapshotRequests: 0, snapshotDbReads: 0, changeRequests: 0, catalogLookups: 0,
-    liveStreamsOpened: 0, activeLiveStreams: 0, framesSent: 0, conflations: 0
+  const dbPath = name => (dataDir ? join(dataDir, `${name}.sqlite`) : ':memory:');
+  const metrics = { scoreboard: channelMetrics(), stats: channelMetrics() };
+  const hubs = {};
+  const stores = {
+    scoreboard: new Store(dbPath('scores'), { initial: initialScoreboard, onCommit: c => { metrics.scoreboard.commits++; hubs.scoreboard.publish(c); } }),
+    stats: new Store(dbPath('stats'), { initial: initialStats, onCommit: c => { metrics.stats.commits++; hubs.stats.publish(c); } })
   };
-  let hub;
-  const store = new Store(dbPath, { onCommit: change => { metrics.commits++; hub.publish(change); } });
-  hub = new Hub({ head: scope => store.head(scope), checkpointMs });
-  const snapshots = new SnapshotCache(store, snapshotTtlMs);
-  const ordersSchema = createOrdersSchema({ store, snapshots, hub, metrics, queueLimit });
-  const currentMetrics = () => ({ ...metrics, snapshotDbReads: snapshots.reads, hubListeners: hub.size });
-  const orders = createServer(graphqlHandler(ordersSchema, (req, res) => {
+  hubs.scoreboard = new ChannelHub({ store: stores.scoreboard, mode: 'state', ...scoreboard, onFrame: () => metrics.scoreboard.framesEmitted++ });
+  hubs.stats = new ChannelHub({ store: stores.stats, mode: 'delta', ...stats, onFrame: () => metrics.stats.framesEmitted++ });
+  const snapshots = { scoreboard: new SnapshotCache(stores.scoreboard, snapshotTtlMs), stats: new SnapshotCache(stores.stats, snapshotTtlMs) };
+
+  const current = () => Object.fromEntries(Object.entries(metrics).map(([name, m]) =>
+    [name, { ...m, snapshotDbReads: snapshots[name].reads, hubListeners: hubs[name].size }]));
+  const withMetrics = (req, res) => {
     if (req.method !== 'GET' || req.url !== '/metrics') return false;
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify(currentMetrics())); return true;
-  }));
-  const catalog = createServer(graphqlHandler(createCatalogSchema(metrics)));
-  const wsServer = new WebSocketServer({ server: orders, path: '/graphql' });
-  const ws = useServer({ schema: ordersSchema, execute, subscribe }, wsServer);
-  const ports = { orders: await listen(orders, ordersPort, host), catalog: await listen(catalog, catalogPort, host) };
+    res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(current())); return true;
+  };
+  const scoresSchema = createScoresSchema({ store: stores.scoreboard, snapshots: snapshots.scoreboard, hub: hubs.scoreboard, metrics: metrics.scoreboard });
+  const statsSchema = createStatsSchema({ store: stores.stats, snapshots: snapshots.stats, hub: hubs.stats, metrics: metrics.stats });
+  const servers = {
+    scores: createServer(graphqlHandler(scoresSchema, withMetrics)),
+    catalog: createServer(graphqlHandler(createCatalogSchema())),
+    stats: createServer(graphqlHandler(statsSchema, withMetrics))
+  };
+  const ws = [
+    useServer({ schema: scoresSchema, execute, subscribe }, new WebSocketServer({ server: servers.scores, path: '/graphql' })),
+    useServer({ schema: statsSchema, execute, subscribe }, new WebSocketServer({ server: servers.stats, path: '/graphql' }))
+  ];
+  const bound = {};
+  for (const name of Object.keys(servers)) bound[name] = await listen(servers[name], ports[name] ?? 0, host);
   return {
-    store, hub, snapshots, ports, get metrics() { return currentMetrics(); },
+    stores, hubs, ports: bound, get metrics() { return current(); },
     async close() {
-      await ws.dispose();
-      await Promise.all([orders, catalog].map(server => new Promise(resolve => { server.closeAllConnections?.(); server.close(resolve); })));
-      store.close();
+      await Promise.all(ws.map(w => w.dispose()));
+      await Promise.all(Object.values(servers).map(server => new Promise(resolve => { server.closeAllConnections?.(); server.close(resolve); })));
+      for (const name of Object.keys(hubs)) for (const key of [...hubs[name].keys.keys()]) {
+        const entry = hubs[name].keys.get(key); clearInterval(entry.timer); clearTimeout(entry.flushTimer);
+      }
+      Object.values(stores).forEach(store => store.close());
     }
   };
 }

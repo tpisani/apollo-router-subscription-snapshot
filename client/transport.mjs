@@ -1,15 +1,30 @@
 import { createClient } from 'graphql-ws';
 import WebSocket from 'ws';
 
-// enrich=true pede details.label (subgraph catalog). Sem deduplicação, o gateway
-// resolve isso por assinante e por frame; ver docs/design.md.
-const stateFields = enrich => `id version status${enrich ? ' details { label }' : ''}`;
-const changeFields = enrich => `scopeId cursor operation committedAt order { ${stateFields(enrich)} }`;
+const SCOREBOARD = 'status period home away clock { running seconds updatedAt } lastEvent { type side minute }';
+const TEAM = 'possession touches shots shotsOnTarget passes corners fouls';
+const STATS = `home { ${TEAM} } away { ${TEAM} } players { id touches passes shots }`;
 
-// Mesma operação e mesmas variáveis para todo cliente do escopo: deduplicável.
-export const eventsQuery = ({ enrich = false } = {}) => `subscription OrderEvents($scopeId: ID!) {
-  orderEvents(scopeId: $scopeId) { scopeId kind cursor change { ${changeFields(enrich)} } }
-}`;
+// Uma subscription e uma query por canal. Todas as variáveis são só a partida,
+// então todo cliente da mesma partida manda a mesma operação: deduplicável.
+export const CHANNELS = {
+  scoreboard: {
+    field: 'scoreboardUpdates',
+    subscription: `subscription Scoreboard($matchId: ID!) {
+      scoreboardUpdates(matchId: $matchId) { matchId kind version committedAt state { ${SCOREBOARD} } } }`,
+    snapshotField: 'scoreboard',
+    snapshot: `query ScoreboardSnapshot($matchId: ID!, $min: Int!) {
+      scoreboard(matchId: $matchId, minVersion: $min) { matchId version state { ${SCOREBOARD} } } }`
+  },
+  stats: {
+    field: 'statsUpdates',
+    subscription: `subscription Stats($matchId: ID!) {
+      statsUpdates(matchId: $matchId) { matchId kind from version committedAt patch { path value } state { ${STATS} } } }`,
+    snapshotField: 'matchStats',
+    snapshot: `query StatsSnapshot($matchId: ID!, $min: Int!) {
+      matchStats(matchId: $matchId, minVersion: $min) { matchId version state { ${STATS} } } }`
+  }
+};
 
 export async function graphql(url, query, variables, signal) {
   const response = await fetch(url, { method: 'POST', signal,
@@ -22,21 +37,18 @@ export async function graphql(url, query, variables, signal) {
   return result.data;
 }
 
-// Cada query só tem campos de um contrato cacheável, para o Cache-Control da
-// resposta não ser reduzido por outro campo.
-export function queryApi(url, scopeId, { enrich = false, signal } = {}) {
+export function snapshotApi(url, channel, matchId, { signal, onBytes = () => {} } = {}) {
+  const { snapshot, snapshotField } = CHANNELS[channel];
   return {
-    snapshot: async minCursor => (await graphql(url, `query Snapshot($scopeId: ID!, $min: ID!) {
-      ordersSnapshot(scopeId: $scopeId, minCursor: $min) { scopeId cursor orders { ${stateFields(enrich)} } } }`,
-    { scopeId, min: minCursor }, signal)).ordersSnapshot,
-    changes: async (after, through) => (await graphql(url, `query Changes($scopeId: ID!, $after: ID!, $through: ID!) {
-      orderChanges(scopeId: $scopeId, after: $after, through: $through) { scopeId after through events { ${changeFields(enrich)} } } }`,
-    { scopeId, after, through }, signal)).orderChanges
+    snapshot: async min => {
+      const data = await graphql(url, snapshot, { matchId, min }, signal);
+      onBytes(JSON.stringify(data).length);
+      return data[snapshotField];
+    }
   };
 }
 
-// Parser incremental de multipart/mixed (protocolo de subscriptions HTTP do Apollo
-// Router). Não assume que um chunk TCP corresponde a uma parte.
+// Parser incremental de multipart/mixed (protocolo de subscriptions HTTP do Apollo Router).
 export async function* multipart(body, boundary) {
   const marker = `--${boundary}`;
   const decoder = new TextDecoder(); let pending = ''; let started = false;
@@ -55,7 +67,7 @@ export async function* multipart(body, boundary) {
       const part = pending.slice(0, end); pending = pending.slice(end + marker.length);
       const split = part.indexOf('\r\n\r\n');
       const json = split >= 0 ? part.slice(split + 4).trim() : '';
-      if (json) yield JSON.parse(json);
+      if (json) yield { message: JSON.parse(json), bytes: json.length };
     }
   }
   throw new Error('Stream multipart interrompido');
@@ -63,32 +75,35 @@ export async function* multipart(body, boundary) {
 
 const fail = errors => Object.assign(new Error(errors[0]?.message ?? 'Erro na subscription'), { code: errors[0]?.extensions?.code });
 
-export async function* multipartEvents(url, scopeId, { signal, enrich = false } = {}) {
+// onBytes recebe o tamanho de cada frame entregue, para medir banda por canal.
+export async function* multipartFrames(url, channel, matchId, { signal, onBytes = () => {} } = {}) {
+  const { subscription, field } = CHANNELS[channel];
   const response = await fetch(url, { method: 'POST', signal,
     headers: { 'content-type': 'application/json', accept: 'multipart/mixed;subscriptionSpec="1.0", application/json' },
-    body: JSON.stringify({ query: eventsQuery({ enrich }), variables: { scopeId } }) });
+    body: JSON.stringify({ query: subscription, variables: { matchId } }) });
   const type = response.headers.get('content-type') ?? '';
   const boundary = /boundary\s*=\s*(?:"([^"]+)"|([^;\s]+))/i.exec(type);
   if (!response.ok || !boundary) throw new Error(`Subscription HTTP ${response.status}: ${await response.text()}`);
-  for await (const message of multipart(response.body, boundary[1] ?? boundary[2])) {
+  for await (const { message, bytes } of multipart(response.body, boundary[1] ?? boundary[2])) {
     if (message.errors?.length) throw fail(message.errors);       // erro de transporte do Router
     const payload = message.payload;
     if (!payload) continue;                                       // {} = heartbeat
     if (payload.errors?.length) throw fail(payload.errors);
-    if (payload.data?.orderEvents) yield payload.data.orderEvents;
+    if (payload.data?.[field]) { onBytes(bytes); yield payload.data[field]; }
   }
 }
 
-// graphql-ws (Hive Gateway e subgraph direto). Um client por conexão, encerrado no abort.
-export async function* wsEvents(url, scopeId, { signal, enrich = false } = {}) {
+export async function* wsFrames(url, channel, matchId, { signal, onBytes = () => {} } = {}) {
+  const { subscription, field } = CHANNELS[channel];
   const client = createClient({ url: url.replace(/^http/, 'ws'), webSocketImpl: WebSocket, retryAttempts: 0, lazy: true });
-  const iterator = client.iterate({ query: eventsQuery({ enrich }), variables: { scopeId } });
+  const iterator = client.iterate({ query: subscription, variables: { matchId } });
   const abort = () => client.terminate();
   signal?.addEventListener('abort', abort, { once: true });
   try {
     for await (const result of iterator) {
       if (result.errors?.length) throw fail(result.errors);
-      yield result.data.orderEvents;
+      onBytes(JSON.stringify(result).length);
+      yield result.data[field];
     }
     if (signal?.aborted) throw new Error('Abortado');
   } finally {
@@ -97,4 +112,4 @@ export async function* wsEvents(url, scopeId, { signal, enrich = false } = {}) {
   }
 }
 
-export const transports = { multipart: multipartEvents, ws: wsEvents };
+export const transports = { multipart: multipartFrames, ws: wsFrames };

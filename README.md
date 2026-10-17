@@ -20,6 +20,7 @@ deduplicação e o cache do Router.
 - **Uma lista de jogos assina só o placar** e não recebe nenhum byte de
   estatísticas.
 
+Cenários passo a passo, interativos: [`docs/cenarios/`](docs/cenarios/).
 Por que dois canais, estado inteiro, retenção e várias instâncias, com os experimentos:
 [`docs/design.md`](docs/design.md). O que foi executado:
 [`docs/validation.md`](docs/validation.md).

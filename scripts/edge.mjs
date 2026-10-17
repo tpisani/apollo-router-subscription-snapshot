@@ -16,17 +16,33 @@ import WebSocket from 'ws';
 //
 // Respostas com erro não são cacheadas, como no Router.
 // Subscriptions saem no protocolo multipart do Router (subscriptionSpec 1.0).
-export async function startEdge({ upstream, port = 0, host = '127.0.0.1', heartbeatMs = 5000, cacheQueries = true }) {
-  const cache = new Map();
+//
+// Protótipo do que um plugin nativo do Router faria (não existe por configuração):
+// 3. Retenção (retain): guarda o último frame de cada upstream deduplicado e o
+//    entrega na hora a quem entra nele. Só é correto porque todo frame traz o estado
+//    inteiro e uma versão: um frame retido mais velho que um em trânsito é ignorado
+//    pelo cliente. Some junto com o upstream quando o último assinante sai.
+// 4. Identidade na chave (identityHeaders): os headers listados entram na chave de
+//    deduplicação e de retenção, como o Router faz com headers na deduplicação.
+//    Clientes com identidades diferentes não compartilham upstream nem frame retido.
+//
+// Várias instâncias: cada edge deduplica e retém só os seus upstreams (como cada
+// instância do Router). `cache` pode ser compartilhado entre instâncias, como o Redis
+// do response cache.
+export async function startEdge({
+  upstream, port = 0, host = '127.0.0.1', heartbeatMs = 5000, cacheQueries = true,
+  retain = true, identityHeaders = [], cache = new Map(), name = 'edge'
+}) {
   const streams = new Map();
-  const metrics = { cacheHits: 0, cacheMisses: 0, upstreamSubscriptions: 0, subscribers: 0, deduplicatedJoins: 0 };
+  const metrics = { cacheHits: 0, cacheMisses: 0, upstreamSubscriptions: 0, subscribers: 0, deduplicatedJoins: 0, retainedReplays: 0 };
   const ws = createClient({ url: upstream.replace(/^http/, 'ws'), webSocketImpl: WebSocket, lazy: true, retryAttempts: 5 });
 
   // Upstreams abertos por operação: com deduplicação, um por (operação, variáveis).
   const currentMetrics = () => {
     const upstreamByOperation = {};
     for (const stream of streams.values()) upstreamByOperation[stream.operation] = (upstreamByOperation[stream.operation] ?? 0) + 1;
-    return { ...metrics, cacheEntries: cache.size, upstreamByOperation };
+    const retainedEntries = [...streams.values()].filter(stream => stream.last).length;
+    return { name, ...metrics, cacheEntries: cache.size, upstreamByOperation, retainedEntries };
   };
   const part = json => `\r\ncontent-type: application/json\r\n\r\n${JSON.stringify(json)}\r\n--graphql`;
 
@@ -42,13 +58,19 @@ export async function startEdge({ upstream, port = 0, host = '127.0.0.1', heartb
         for (const subscriber of stream.subscribers) { if (last) subscriber.write(part(last)); subscriber.end('--\r\n'); }
       };
       stream.dispose = ws.subscribe({ query: body.query, variables: body.variables, operationName: body.operationName }, {
-        next: result => { for (const subscriber of stream.subscribers) subscriber.write(part({ payload: result })); },
+        next: result => {
+          if (retain && !result.errors?.length) stream.last = result;
+          for (const subscriber of stream.subscribers) subscriber.write(part({ payload: result }));
+        },
         error: error => close({ payload: null, errors: [{ message: error?.message ?? 'Upstream encerrado' }] }),
         complete: () => close({ payload: null, errors: [{ message: 'Upstream encerrado' }] })
       });
     }
     res.writeHead(200, { 'content-type': 'multipart/mixed;boundary="graphql";subscriptionSpec="1.0"', 'cache-control': 'no-store' });
     res.write('\r\n--graphql');
+    // Quem entra num upstream já aberto recebe o último estado na hora, em vez de
+    // esperar o próximo frame (commit ou periódico).
+    if (stream.last) { res.write(part({ payload: stream.last })); metrics.retainedReplays++; }
     stream.subscribers.add(res); metrics.subscribers++;
     const heartbeat = setInterval(() => res.write(part({})), heartbeatMs);
     res.on('close', () => {
@@ -74,7 +96,8 @@ export async function startEdge({ upstream, port = 0, host = '127.0.0.1', heartb
       const ast = getOperationAST(parse(body.query), body.operationName);
       const operation = ast?.operation;
       body.operationName ??= ast?.name?.value;
-      const key = JSON.stringify([body.query, body.variables ?? {}, body.operationName ?? null]);
+      const identity = identityHeaders.map(header => req.headers[header] ?? null);
+      const key = JSON.stringify([body.query, body.variables ?? {}, body.operationName ?? null, identity]);
       if (operation === 'subscription') return join(key, body, res);
       if (operation === 'query' && cacheQueries && cache.has(key)) {
         metrics.cacheHits++;
@@ -108,8 +131,9 @@ export async function startEdge({ upstream, port = 0, host = '127.0.0.1', heartb
 if (import.meta.url === `file://${process.argv[1]}`) {
   const edge = await startEdge({
     upstream: process.env.UPSTREAM_URL ?? 'http://localhost:4000/graphql',
-    port: Number(process.env.EDGE_PORT ?? 4010), host: process.env.EDGE_HOST ?? '0.0.0.0'
+    port: Number(process.env.EDGE_PORT ?? 4010), host: process.env.EDGE_HOST ?? '0.0.0.0',
+    retain: process.env.RETAIN !== '0', identityHeaders: (process.env.IDENTITY_HEADERS ?? '').split(',').filter(Boolean)
   });
-  console.log(`edge (dedup + cache de queries) ${edge.url.replace('0.0.0.0', 'localhost')} -> ${process.env.UPSTREAM_URL ?? 'http://localhost:4000/graphql'}`);
+  console.log(`edge (dedup + retenção + cache de queries) ${edge.url.replace('0.0.0.0', 'localhost')} -> ${process.env.UPSTREAM_URL ?? 'http://localhost:4000/graphql'}`);
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => edge.close().then(() => process.exit(0)));
 }

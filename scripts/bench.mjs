@@ -1,10 +1,11 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { StateSync, DeltaSync, runSync } from '../client/sync.mjs';
+import { createSync, runSync } from '../client/sync.mjs';
 import { snapshotApi, transports } from '../client/transport.mjs';
 import { scoreboardOps, applyStatEvents, playGenerator } from '../src/sports.mjs';
 import { startStack } from './stack.mjs';
 
-// Partida simulada com clientes reais pelo edge (dedup + cache, multipart como o Router):
+// Partida simulada com clientes reais pelo edge (dedup + retenção + cache, multipart como o Router);
+// EDGES=3 coloca 3 instâncias atrás de um balanceador round-robin:
 //   SCORE_ONLY clientes de lista de jogos (só placar)
 //   FULL       clientes da tela da partida (placar + estatísticas)
 // Lances a EVENTS_PER_SECOND, com uma rajada de STORM_RATE lances/s no meio, e gols.
@@ -14,8 +15,9 @@ const full = Number(process.env.FULL ?? 50);
 const seconds = Number(process.env.SECONDS ?? 10);
 const eventsPerSecond = Number(process.env.EVENTS_PER_SECOND ?? 20);
 const stormRate = Number(process.env.STORM_RATE ?? 200);
-const stack = await startStack({ stats: { coalesceMs: Number(process.env.COALESCE_MS ?? 500), checkpointMs: 1000 } });
-const url = stack.edge.url;
+const edgeCount = Number(process.env.EDGES ?? 1);
+const stack = await startStack({ edgeCount, stats: { throttleMs: Number(process.env.THROTTLE_MS ?? 500), periodicMs: 1000 } });
+const url = edgeCount > 1 ? stack.balancer.url : stack.edge.url;
 const matchId = `bench-${Date.now()}`;
 const next = playGenerator(matchId, 3);
 const { stores } = stack.subgraphs;
@@ -23,14 +25,18 @@ stores.scoreboard.update(matchId, s => scoreboardOps.startPeriod(s, { period: 1 
 for (let i = 0; i < 400; i++) stores.stats.update(matchId, s => applyStatEvents(s, [next()], matchId)); // jogo já em andamento
 
 const latency = { scoreboard: [], stats: [] };
+const bootstrap = []; // ms da abertura de cada subscription até o primeiro estado confirmado
 const controller = new AbortController();
 const clients = [];
 const connect = (kind, channels) => {
   const client = { kind, bytes: { scoreboard: 0, stats: 0 }, syncs: {}, runs: [] };
   for (const channel of channels) {
-    const sync = new (channel === 'scoreboard' ? StateSync : DeltaSync)({ matchId, api: snapshotApi(url, channel, matchId, { onBytes: n => { client.bytes[channel] += n; } }) });
+    const sync = createSync(channel, { matchId, api: snapshotApi(url, channel, matchId, { onBytes: n => { client.bytes[channel] += n; } }) });
     client.syncs[channel] = sync;
-    client.runs.push(runSync({ sync, signal: controller.signal, connect: async function* (signal) {
+    const t0 = Date.now(); let measured = false;
+    client.runs.push(runSync({ sync, signal: controller.signal,
+      onUpdate: view => { if (view.synced && !measured) { measured = true; bootstrap.push(Date.now() - t0); } },
+      connect: async function* (signal) {
       for await (const frame of transports.multipart(url, channel, matchId, { signal, onBytes: n => { client.bytes[channel] += n; } })) {
         if (frame.committedAt) latency[channel].push(Date.now() - frame.committedAt);
         yield frame;
@@ -59,7 +65,7 @@ const elapsed = (Date.now() - t0) / 1000;
 await delay(1500);
 const truth = { scoreboard: stores.scoreboard.read(matchId), stats: stores.stats.read(matchId) };
 const converged = clients.filter(c => Object.entries(c.syncs).every(([ch, s]) => s.version === truth[ch].version)).length;
-const after = stack.subgraphs.metrics; const edge = stack.edge.metrics;
+const after = stack.subgraphs.metrics; const edgeMetrics = stack.edges.map(e => e.metrics);
 controller.abort();
 await Promise.all(clients.flatMap(c => c.runs));
 await stack.stop();
@@ -75,7 +81,8 @@ console.log(JSON.stringify({
   duracaoS: +elapsed.toFixed(1), lances: plays, gols: goals, convergiram: `${converged}/${clients.length}`,
   latenciaMs: {
     placar: { p50: pct(latency.scoreboard, 0.5), p99: pct(latency.scoreboard, 0.99), max: pct(latency.scoreboard, 1), n: latency.scoreboard.length },
-    estatisticas: { p50: pct(latency.stats, 0.5), p99: pct(latency.stats, 0.99), max: pct(latency.stats, 1), n: latency.stats.length }
+    estatisticas: { p50: pct(latency.stats, 0.5), p99: pct(latency.stats, 0.99), max: pct(latency.stats, 1), n: latency.stats.length },
+    entradaAteSincronizar: { p50: pct(bootstrap, 0.5), max: pct(bootstrap, 1) }
   },
   porCliente: { 'só placar': perClient('só placar'), 'placar + estatísticas': perClient('placar + estatísticas') },
   subgraphs: {
@@ -84,5 +91,5 @@ console.log(JSON.stringify({
     snapshotsNoBootstrap: { placar: queriesBefore.scoreboard.snapshotRequests, estatisticas: queriesBefore.stats.snapshotRequests },
     snapshotsDuranteAoVivo: { placar: after.scoreboard.snapshotRequests - queriesBefore.scoreboard.snapshotRequests, estatisticas: after.stats.snapshotRequests - queriesBefore.stats.snapshotRequests }
   },
-  edge: { upstreams: edge.upstreamByOperation, cacheHits: edge.cacheHits, cacheMisses: edge.cacheMisses }
+  instancias: edgeMetrics.map(e => ({ upstreams: e.upstreamByOperation, entradasComFrameRetido: e.retainedReplays, cacheHits: e.cacheHits }))
 }, null, 2));

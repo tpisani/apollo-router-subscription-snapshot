@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
-import { StateSync, DeltaSync, runSync } from '../client/sync.mjs';
+import { createSync, statsFromWire, runSync } from '../client/sync.mjs';
 import { graphql, snapshotApi, transports } from '../client/transport.mjs';
 import { playGenerator } from '../src/sports.mjs';
 
@@ -11,9 +11,9 @@ async function until(predicate, message, ms = 10_000) {
 
 // Cenário de ponta a ponta contra qualquer endpoint (edge emulado ou Apollo Router):
 // dois canais por partida, caches antigos, late joiners em streams deduplicados,
-// rajada de estatísticas com gol no meio, retomada e convergência exata.
+// rajada de estatísticas com gol no meio, retomada sem query e convergência exata.
 //   metrics(): métricas dos subgraphs (/metrics de scores e stats).
-export async function verify({ url, transport = 'multipart', metrics, expectDedup = true, expectStaleCache = true, log = () => {} }) {
+export async function verify({ url, transport = 'multipart', metrics, headers = {}, expectDedup = true, expectStaleCache = true, log = () => {} }) {
   const matchId = `verify-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   const subscribe = transports[transport];
   const next = playGenerator(matchId, 5);
@@ -30,11 +30,11 @@ export async function verify({ url, transport = 'multipart', metrics, expectDedu
     const controller = new AbortController();
     const client = { name, syncs: {}, bytes: { scoreboard: 0, stats: 0 }, errors: [], runs: [] };
     for (const channel of channels) {
-      const sync = existing[channel] ?? new (channel === 'scoreboard' ? StateSync : DeltaSync)({ matchId, api: snapshotApi(url, channel, matchId) });
+      const sync = existing[channel] ?? createSync(channel, { matchId, api: snapshotApi(url, channel, matchId, { headers }), });
       client.syncs[channel] = sync;
       client.runs.push(runSync({ sync, signal: controller.signal, wait: () => 100,
         connect: async function* (signal) {
-          for await (const frame of subscribe(url, channel, matchId, { signal, onBytes: n => { client.bytes[channel] += n; } })) {
+          for await (const frame of subscribe(url, channel, matchId, { signal, headers, onBytes: n => { client.bytes[channel] += n; } })) {
             if (frame.committedAt) (channel === 'scoreboard' ? goalLatencies : statsLatencies).push(Date.now() - frame.committedAt);
             yield frame;
           }
@@ -65,7 +65,9 @@ export async function verify({ url, transport = 'multipart', metrics, expectDedu
     const b = connect('B', ['scoreboard']);
     await until(() => synced(a, 'scoreboard', scoreVersion) && synced(a, 'stats', statsVersion) && synced(b, 'scoreboard', scoreVersion), 'A e B sincronizados');
     assert.equal(a.syncs.scoreboard.state.home, 1);
-    assert.equal(a.syncs.scoreboard.stats.reseeds, 0, 'placar: o primeiro frame já traz o estado; nenhuma query de recuperação');
+    for (const channel of ['scoreboard', 'stats']) {
+      assert.ok(a.syncs[channel].stats.snapshots <= 1, `${channel}: só a base provisória; o primeiro frame já traz o estado`);
+    }
     log(`A stats: ${JSON.stringify(a.syncs.stats.stats)}`);
 
     // 3. Late joiner de estatísticas num stream já deduplicado.
@@ -80,32 +82,32 @@ export async function verify({ url, transport = 'multipart', metrics, expectDedu
 
     // 4. Rajada de estatísticas (600 lances em ~1,5 s) com um gol no meio.
     goalLatencies.length = 0;
-    const reseedsBefore = a.syncs.scoreboard.stats.reseeds;
     const framesBefore = a.syncs.stats.stats.frames;
     const storm = (async () => { for (let i = 0; i < 30; i++) { await plays(20); await delay(50); } })();
     await delay(700); await goal('AWAY'); await storm;
     await until(() => [a, b].every(x => x.syncs.scoreboard.version === scoreVersion), 'gol nos clientes de placar');
     await until(() => [a, c].every(x => synced(x, 'stats', statsVersion)), 'estatísticas convergem após a rajada');
-    assert.equal(a.syncs.scoreboard.stats.reseeds, reseedsBefore, 'a rajada de estatísticas não afeta o placar');
     const statsFrames = a.syncs.stats.stats.frames - framesBefore;
     assert.ok(statsFrames < 30, `600 lances viram poucos frames (${statsFrames}), não 600`);
     assert.equal(b.bytes.stats, 0, 'quem só mostra o placar não recebe estatísticas');
 
-    // 5. Retomada de estatísticas após queda: um snapshot com minVersion, sem histórico.
+    // 5. Retomada após queda: o estado é mantido e o próximo frame resolve, sem query.
     await a.close();
-    await plays(50);
-    const reseeds = a.syncs.stats.stats.reseeds;
+    await plays(50); await goal('HOME');
+    const snapshots = a.syncs.stats.stats.snapshots + a.syncs.scoreboard.stats.snapshots;
     const a2 = connect('A (retomado)', ['scoreboard', 'stats'], a.syncs);
     await until(() => synced(a2, 'stats', statsVersion) && synced(a2, 'scoreboard', scoreVersion), 'retomada de A');
-    assert.ok(a.syncs.stats.stats.reseeds <= reseeds + 1, 'no máximo um snapshot na retomada');
+    assert.equal(a.syncs.stats.stats.snapshots + a.syncs.scoreboard.stats.snapshots, snapshots, 'retomada sem nenhuma query');
 
     // 6. Todos iguais ao banco (consultado com minVersion = última versão escrita).
+    const live = clients.filter(x => x !== a);
+    await until(() => live.every(x => Object.entries(x.syncs).every(([ch, sync]) => sync.version === (ch === 'scoreboard' ? scoreVersion : statsVersion))), 'todos na última versão');
     const t = await truth();
-    for (const client of clients.filter(x => x !== a)) {
+    for (const client of live) {
       if (client.syncs.scoreboard) assert.deepEqual([client.syncs.scoreboard.version, client.syncs.scoreboard.state.home, client.syncs.scoreboard.state.away], [t.scoreboard.version, t.scoreboard.state.home, t.scoreboard.state.away], client.name);
       if (client.syncs.stats) {
         assert.equal(client.syncs.stats.version, t.stats.version, client.name);
-        assert.deepEqual(client.syncs.stats.state, new DeltaSync({ matchId, api: null }).fromSnapshot(t.stats.state), `${client.name} difere do banco`);
+        assert.deepEqual(client.syncs.stats.state, statsFromWire(t.stats.state), `${client.name} difere do banco`);
       }
     }
     const pct = (values, p) => values.sort((x, y) => x - y)[Math.min(values.length - 1, Math.floor(values.length * p))];

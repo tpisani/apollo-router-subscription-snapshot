@@ -19,16 +19,16 @@ export const CHANNELS = {
   stats: {
     field: 'statsUpdates',
     subscription: `subscription Stats($matchId: ID!) {
-      statsUpdates(matchId: $matchId) { matchId kind from version committedAt patch { path value } state { ${STATS} } } }`,
+      statsUpdates(matchId: $matchId) { matchId kind version committedAt state { ${STATS} } } }`,
     snapshotField: 'matchStats',
     snapshot: `query StatsSnapshot($matchId: ID!, $min: Int!) {
       matchStats(matchId: $matchId, minVersion: $min) { matchId version state { ${STATS} } } }`
   }
 };
 
-export async function graphql(url, query, variables, signal) {
+export async function graphql(url, query, variables, signal, headers = {}) {
   const response = await fetch(url, { method: 'POST', signal,
-    headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) });
+    headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ query, variables }) });
   const result = await response.json();
   if (!response.ok || result.errors?.length) {
     const error = new Error(result.errors?.[0]?.message ?? `HTTP ${response.status}`);
@@ -37,11 +37,11 @@ export async function graphql(url, query, variables, signal) {
   return result.data;
 }
 
-export function snapshotApi(url, channel, matchId, { signal, onBytes = () => {} } = {}) {
+export function snapshotApi(url, channel, matchId, { signal, headers, onBytes = () => {} } = {}) {
   const { snapshot, snapshotField } = CHANNELS[channel];
   return {
     snapshot: async min => {
-      const data = await graphql(url, snapshot, { matchId, min }, signal);
+      const data = await graphql(url, snapshot, { matchId, min }, signal, headers);
       onBytes(JSON.stringify(data).length);
       return data[snapshotField];
     }
@@ -76,10 +76,10 @@ export async function* multipart(body, boundary) {
 const fail = errors => Object.assign(new Error(errors[0]?.message ?? 'Erro na subscription'), { code: errors[0]?.extensions?.code });
 
 // onBytes recebe o tamanho de cada frame entregue, para medir banda por canal.
-export async function* multipartFrames(url, channel, matchId, { signal, onBytes = () => {} } = {}) {
+export async function* multipartFrames(url, channel, matchId, { signal, headers = {}, onBytes = () => {} } = {}) {
   const { subscription, field } = CHANNELS[channel];
   const response = await fetch(url, { method: 'POST', signal,
-    headers: { 'content-type': 'application/json', accept: 'multipart/mixed;subscriptionSpec="1.0", application/json' },
+    headers: { 'content-type': 'application/json', accept: 'multipart/mixed;subscriptionSpec="1.0", application/json', ...headers },
     body: JSON.stringify({ query: subscription, variables: { matchId } }) });
   const type = response.headers.get('content-type') ?? '';
   const boundary = /boundary\s*=\s*(?:"([^"]+)"|([^;\s]+))/i.exec(type);

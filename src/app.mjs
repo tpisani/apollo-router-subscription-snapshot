@@ -88,7 +88,7 @@ export function createStatsSchema({ store, snapshots, hub, metrics }) {
         return (store.update(matchId, state => applyStatEvents(state, events, matchId)) ?? store.read(matchId)).version;
       })
     },
-    Subscription: { statsUpdates: liveField(hub, metrics, frame => (frame.kind === 'STATE' ? { ...frame, state: statsOut(frame.state) } : frame)) }
+    Subscription: { statsUpdates: liveField(hub, metrics, frame => ({ ...frame, state: statsOut(frame.state) })) }
   } }]);
 }
 
@@ -142,7 +142,7 @@ const listen = (server, port, host) => new Promise((resolve, reject) => {
 // Os três subgraphs num processo (por conveniência local), cada um com seu banco.
 export async function startSubgraphs({
   dataDir = null, ports = { scores: 4001, catalog: 4002, stats: 4003 }, host = '0.0.0.0',
-  scoreboard = { checkpointMs: 1000 }, stats = { checkpointMs: 1000, coalesceMs: 500 }, snapshotTtlMs = 1000
+  scoreboard = { periodicMs: 1000 }, stats = { periodicMs: 1000, throttleMs: 500 }, snapshotTtlMs = 1000
 } = {}) {
   const dbPath = name => (dataDir ? join(dataDir, `${name}.sqlite`) : ':memory:');
   const metrics = { scoreboard: channelMetrics(), stats: channelMetrics() };
@@ -152,7 +152,7 @@ export async function startSubgraphs({
     stats: new Store(dbPath('stats'), { initial: initialStats, onCommit: c => { metrics.stats.commits++; hubs.stats.publish(c); } })
   };
   hubs.scoreboard = new ChannelHub({ store: stores.scoreboard, mode: 'state', ...scoreboard, onFrame: () => metrics.scoreboard.framesEmitted++ });
-  hubs.stats = new ChannelHub({ store: stores.stats, mode: 'delta', ...stats, onFrame: () => metrics.stats.framesEmitted++ });
+  hubs.stats = new ChannelHub({ store: stores.stats, mode: 'state', ...stats, onFrame: () => metrics.stats.framesEmitted++ });
   const snapshots = { scoreboard: new SnapshotCache(stores.scoreboard, snapshotTtlMs), stats: new SnapshotCache(stores.stats, snapshotTtlMs) };
 
   const current = () => Object.fromEntries(Object.entries(metrics).map(([name, m]) =>

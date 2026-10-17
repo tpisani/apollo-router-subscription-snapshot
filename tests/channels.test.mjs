@@ -5,12 +5,11 @@ import { Store } from '../src/store.mjs';
 import { ChannelHub, LiveStream } from '../src/channels.mjs';
 import { applyPatch } from '../src/patch.mjs';
 import { initialScoreboard, initialStats, scoreboardOps, applyStatEvents, playGenerator } from '../src/sports.mjs';
-import { DeltaSync } from '../client/sync.mjs';
 
-function setup(mode, options = {}) {
+function setup(mode, options = {}, initial = mode === 'state' ? initialScoreboard : initialStats) {
   let hub;
-  const store = new Store(':memory:', { initial: mode === 'state' ? initialScoreboard : initialStats, onCommit: c => hub.publish(c) });
-  hub = new ChannelHub({ store, mode, checkpointMs: 60_000, ...options });
+  const store = new Store(':memory:', { initial, onCommit: c => hub.publish(c) });
+  hub = new ChannelHub({ store, mode, periodicMs: 60_000, ...options });
   return { store, hub, open: () => new LiveStream({ hub, key: 'm1' }) };
 }
 const statEvent = playGenerator('m1', 5);
@@ -30,8 +29,8 @@ test('placar: STATE imediato na abertura e a cada commit, com o estado inteiro',
   await stream.return(); store.close();
 });
 
-test('placar: frames periódicos com o estado (late joiner e perda se resolvem sem query)', async () => {
-  const { store, open } = setup('state', { checkpointMs: 20 });
+test('frames periódicos com o estado (late joiner e perda se resolvem sem query)', async () => {
+  const { store, open } = setup('state', { periodicMs: 20 });
   const stream = open(); await stream.next();
   const periodic = (await stream.next()).value;
   assert.deepEqual([periodic.kind, periodic.version, periodic.committedAt], ['STATE', 0, null]);
@@ -48,7 +47,7 @@ test('placar: consumidor lento recebe só o STATE mais novo', async () => {
   await stream.return(); store.close();
 });
 
-test('estatísticas: 200 commits numa janela viram um DELTA; janelas são contíguas', async () => {
+test('modo delta (experimentos): 200 commits numa janela viram um DELTA; janelas contíguas', async () => {
   const { store, open } = setup('delta', { coalesceMs: 40, adaptive: false });
   const stream = open();
   assert.deepEqual((await stream.next()).value.kind, 'CHECKPOINT');
@@ -64,25 +63,7 @@ test('estatísticas: 200 commits numa janela viram um DELTA; janelas são contí
   await stream.return(); store.close();
 });
 
-test('estatísticas: CHECKPOINT informa o que o stream entregou, não o head; sem reseed espúrio', async () => {
-  const { store, hub, open } = setup('delta', { coalesceMs: 50, checkpointMs: 10, adaptive: false });
-  const stream = open(); await stream.next();
-  let reseeds = 0;
-  const sync = new DeltaSync({ matchId: 'm1', api: { snapshot: async min => { reseeds++; const d = store.read('m1'); return { matchId: 'm1', version: d.version, state: { ...d.state, players: [] } }; } } });
-  sync.initialize({ matchId: 'm1', version: 0, state: { ...initialStats(), players: [] } });
-  play(store, 10); // janela aberta: head 10, entregue 0
-  const checkpoint = (await stream.next()).value;
-  assert.deepEqual([checkpoint.kind, checkpoint.version], ['CHECKPOINT', 0]);
-  await sync.accept(checkpoint);
-  assert.equal(reseeds, 0, 'checkpoint durante a janela não pode disparar snapshot');
-  let frame; do { frame = (await stream.next()).value; } while (frame.kind !== 'DELTA');
-  await sync.accept(frame);
-  assert.equal(sync.version, 10); assert.equal(reseeds, 0);
-  assert.equal(hub.keys.get('m1').delivered, 10);
-  await stream.return(); store.close();
-});
-
-test('estatísticas: consumidor lento recebe DELTAs fundidos, sem perda e com fila limitada', async () => {
+test('modo delta (experimentos): consumidor lento recebe DELTAs fundidos, sem perda', async () => {
   const { store, open } = setup('delta', { coalesceMs: 5, adaptive: false });
   const stream = open(); await stream.next();
   for (let w = 0; w < 6; w++) { play(store, 20); await delay(15); }
@@ -105,7 +86,7 @@ test('return() libera o listener e os timers mesmo aguardando', async () => {
   store.close();
 });
 
-test('estatísticas: por janela vai o menor, patch em jogo normal e estado inteiro na rajada', async () => {
+test('modo delta (experimentos): por janela vai o menor, patch ou estado inteiro', async () => {
   const { store, open } = setup('delta', { coalesceMs: 20 });
   play(store, 400); // estado já populado (todos os jogadores), como no meio do jogo
   const stream = open();
@@ -120,7 +101,7 @@ test('estatísticas: por janela vai o menor, patch em jogo normal e estado intei
   } finally { await stream.return(); store.close(); }
 });
 
-test('fila: STATE supera DELTAs e CHECKPOINTs pendentes', async () => {
+test('modo delta (experimentos): STATE supera DELTAs pendentes na fila', async () => {
   const { store, open } = setup('delta', { coalesceMs: 5 });
   play(store, 400);
   const stream = open();
@@ -132,3 +113,41 @@ test('fila: STATE supera DELTAs e CHECKPOINTs pendentes', async () => {
   } finally { await stream.return(); store.close(); }
 });
 
+
+// Estatísticas em produção: estado inteiro com limitador.
+test('limitador: calmo sai na hora; rajada sai no máximo 1 por janela, com o estado mais recente', async () => {
+  const { store, open } = setup('state', { throttleMs: 60 }, initialStats);
+  play(store, 400);
+  const stream = open();
+  try {
+    await stream.next();
+    const t0 = Date.now();
+    play(store, 1);
+    const calm = (await stream.next()).value;
+    assert.ok(Date.now() - t0 < 20, 'lance isolado sai na hora');
+    assert.equal(calm.version, 401);
+    const burstStart = Date.now();
+    for (let i = 0; i < 10; i++) { play(store, 10); await delay(10); } // ~100 ms de rajada
+    const frames = [];
+    while (true) {
+      const frame = (await stream.next()).value; frames.push({ frame, at: Date.now() - burstStart });
+      if (frame.version === 501) break;
+    }
+    assert.ok(frames.length <= 3, `rajada de 100 commits em ~100 ms virou ${frames.length} frames`);
+    assert.deepEqual(frames.at(-1).frame.state, store.read('m1').state, 'o último frame tem o estado final');
+  } finally { await stream.return(); store.close(); }
+});
+
+test('limitador: committedAt é o do commit mais antigo ainda não enviado', async () => {
+  const { store, open } = setup('state', { throttleMs: 50 }, initialStats);
+  const stream = open();
+  try {
+    await stream.next();
+    play(store, 1); await stream.next();                 // abre a janela
+    const first = Date.now(); play(store, 1);
+    await delay(20); play(store, 1);
+    const frame = (await stream.next()).value;
+    assert.equal(frame.version, 3);
+    assert.ok(Math.abs(frame.committedAt - first) < 5, 'mede o atraso do dado mais velho do frame');
+  } finally { await stream.return(); store.close(); }
+});

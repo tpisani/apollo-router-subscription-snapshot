@@ -1,175 +1,172 @@
 # Desenho: placar e estatísticas ao vivo
 
-## A pergunta
+## Resumo
 
-Placar e estatísticas têm frequências de atualização diferentes. Devem ser
-subscriptions diferentes?
+- **Dois canais, duas subscriptions:** `scoreboardUpdates(matchId)` (subgraph
+  `scores`) e `statsUpdates(matchId)` (subgraph `stats`).
+- **Todo frame traz o estado inteiro e uma versão:** `STATE { version, state }`.
+  O cliente fica com o de maior versão. Não há lacuna, histórico, patch nem
+  query de recuperação.
+- **Cada canal tem o seu ritmo.** O placar envia a cada commit, na hora. As
+  estatísticas passam por um limitador: na hora quando o jogo está calmo, e no
+  máximo 1 frame a cada 500 ms numa rajada. Os dois canais também mandam um
+  frame periódico.
+- **As subscriptions só têm `matchId`:** o Router deduplica, com um upstream por
+  canal e partida em cada instância.
+- **Retenção do último frame** (protótipo de um plugin do Router, em
+  `scripts/edge.mjs`): quem entra num upstream já aberto recebe o estado na hora,
+  em vez de esperar o frame periódico.
+- **Várias instâncias:** cada uma deduplica e retém só os seus upstreams, e isso
+  basta. Ninguém precisa compartilhar o último estado.
 
-**Sim.** Mas os experimentos mostraram que o motivo principal não é o que parece à
-primeira vista. Separar não é o que impede uma rajada de estatísticas de atrasar o
-gol: quem faz isso é agrupar as estatísticas por janela. Separar vale porque:
+## Por que dois canais
+
+Os experimentos (`tests/experiments.test.mjs`) mostraram que o motivo principal
+não é o óbvio. O que protege o gol de uma rajada de estatísticas é **limitar a
+frequência** das estatísticas, não separar os canais. Separar vale porque:
 
 1. **Cada tela recebe só o que mostra.** Uma lista de jogos assina só o placar e
-   recebe ~290–440 B/s por partida. Num stream único receberia também as
-   estatísticas: ~2.400 B/s, **8× mais**, para não exibir nada disso.
-2. **Cada canal tem a sua política de envio.** O placar sai a cada commit, na
-   hora, com o estado inteiro. As estatísticas saem uma vez por janela de 500 ms,
-   com o menor entre o patch e o estado. Num stream único, uma política serviria
-   mal um dos dois.
-3. **Versões, caches e falhas independentes.** Cada canal tem o seu contador de
-   versão, o seu snapshot cacheável (com TTL próprio) e a sua recuperação.
-   Perder um frame de estatísticas pede um snapshot de estatísticas e não toca
-   no placar. O teste de ponta a ponta afirma isso: zero recuperações no placar
-   durante a rajada.
-4. **Donos diferentes.** São subgraphs diferentes (`scores` e `stats`), como
-   costumam ser os provedores e times reais. Cada um declara a sua subscription;
-   o Router faz passthrough para os dois.
+   recebe ~300–470 B/s por partida. Num stream único receberia também as
+   estatísticas.
+2. **Cada canal tem a sua política:** o placar sai na hora, as estatísticas têm
+   o limitador.
+3. **Versões, caches e falhas independentes.**
+4. **Donos diferentes:** são subgraphs diferentes, e o Router faz passthrough
+   para os dois.
 
-Uma operação GraphQL de subscription tem um único campo raiz, então "uma
-subscription com tudo" exigiria um campo com união de tipos de frame. As
-variáveis seriam as mesmas para todos e a deduplicação continuaria funcionando,
-mas os quatro pontos acima se perderiam.
-
-## Os canais
-
-| | Placar (`scoreboardUpdates`) | Estatísticas (`statsUpdates`) |
+| | Placar | Estatísticas |
 | --- | --- | --- |
-| Subgraph | `scores` | `stats` |
-| Muda | poucas vezes por partida (gol, início, intervalo, fim) | ~20 vezes/s, rajadas de 200/s |
-| Tamanho | ~150 B | ~1–2 KB (2 times + 22 jogadores) |
-| Urgência | máxima (gol) | tolera ~0,5 s |
-| Frame | `STATE`: o estado inteiro, a cada commit | um por janela de 500 ms: `DELTA` (valores finais dos campos alterados) ou `STATE`, o que for menor |
-| Periódico | `STATE` a cada 1 s | `CHECKPOINT { version }` a cada 1 s |
-| Fila de um assinante lento | só o `STATE` mais novo | `DELTA`s fundidos num só; `STATE` supera tudo |
-| Recuperação | nenhuma: o próximo frame resolve | `matchStats(minVersion: v)` |
-| Snapshot cacheável | `scoreboard(minVersion)`: 2 s na chave 0, 60 s com versão | `matchStats(minVersion)`: 5 s na chave 0, 60 s com versão |
+| Muda | poucas vezes por partida | ~20 lances/s, rajadas de 200/s |
+| Tamanho do estado | ~150 B | ~1–2 KB (2 times + 22 jogadores) |
+| Envio | um `STATE` a cada commit, na hora | `STATE` com limitador de 500 ms |
+| Periódico | `STATE` a cada 1 s | `STATE` a cada 1 s |
+| Fila de assinante lento | só o mais novo | só o mais novo |
+| Snapshot cacheável (só para o primeiro desenho) | `scoreboard(minVersion)`: 2 s | `matchStats(minVersion)`: 5 s |
 
-Dados que não mudam durante o jogo (times, elencos) ficam no subgraph `catalog`,
-com cache de 1 h, fora dos canais ao vivo.
+O relógio não é enviado a cada segundo: `Clock { running, seconds, updatedAt }`,
+e o cliente avança sozinho.
 
-### O relógio não é enviado a cada segundo
+## Por que estado inteiro, e não patch
 
-`Clock { running, seconds, updatedAt }`: `seconds` vale no instante
-`updatedAt`; enquanto `running`, o cliente avança sozinho. Só início, pausa e
-fim geram commit. Um relógio enviado por push seria 1 frame/s por cliente para
-um dado que o cliente calcula.
+Os experimentos mediram cinco políticas para as estatísticas (60 s, 20 lances/s;
+gol p95 com 30 gols durante uma rajada num enlace de 16 KB/s):
 
-## Protocolo de cada canal
-
-As subscriptions têm só `matchId` como variável: todos os clientes da partida
-mandam a mesma operação e o Router deduplica (um upstream por canal e partida).
-Ninguém recebe um frame inicial próprio. Como não há histórico, a recuperação é
-sempre um snapshot com versão mínima.
-
-### Placar (`StateSync`)
-
-- Cada frame `STATE` traz o estado inteiro e a versão. O cliente fica com o de
-  maior versão e ignora os outros.
-- **Late joiner:** mostra a base cacheada (`minVersion: 0`) como provisória;
-  o primeiro frame, um commit ou o periódico de 1 s, já é o estado correto.
-  **Nenhuma query de recuperação.**
-- **Perda, duplicata, reordenação, reconexão:** o próximo frame resolve.
-
-### Estatísticas (`DeltaSync`)
-
-- **`DELTA { from, version, patch }`:** aplicável quando
-  `from ≤ versão local < version`. Os patches levam valores finais, nunca
-  incrementos, então um patch que cobre `(from, version]` aplicado sobre o
-  estado em qualquer versão desse intervalo dá o estado exato em `version`. Um
-  snapshot tirado no meio da janela continua aplicável.
-- **`STATE { version, state }`:** substitui tudo, como no placar. O hub manda
-  `STATE` quando o estado inteiro é menor que o patch da janela.
-- **`CHECKPOINT { version }`:** até onde o **stream** entregou, não o head do
-  banco. Um commit ainda dentro da janela não pode fazer o cliente achar que
-  perdeu algo; o teste "sem reseed espúrio" cobre isso.
-- **`DELTA` com `from` maior que a versão local, ou `CHECKPOINT` acima dela:**
-  faltou algo. O cliente pede `matchStats(minVersion: version)`, uma chave nova,
-  e substitui o estado.
-
-### Por que continua correto com cache e deduplicação
-
-- O "agora" vem do stream. Uma query responde "um estado em alguma versão ≥
-  minVersion", e isso continua verdadeiro para sempre; qualquer cache pode
-  servi-la.
-- Clientes que entram juntos recebem o mesmo frame, pedem o mesmo `minVersion`
-  e compartilham a chave de cache.
-- O cliente rejeita um snapshot abaixo do `minVersion` pedido (um cache quebrado).
-
-## O que os experimentos mostraram
-
-Os experimentos estão em `tests/experiments.test.mjs`: hubs reais, tempo
-simulado e 60 s de partida a 20 lances/s.
-
-**E1, banda por cliente (bytes/s no formato multipart do Router):**
-
-| Política das estatísticas | frames/s | B/s |
+| Política | B/s por cliente | Gol p95 no mesmo enlace |
 | --- | --- | --- |
-| estado inteiro a cada lance | 20,7 | 26.707 |
-| patch a cada lance | 20,7 | 5.866 |
-| estado inteiro a cada 500 ms | 3 | 2.797 |
-| patch a cada 500 ms | 3 | 2.135 |
-| **o menor por janela de 500 ms (adotado)** | **3** | **2.132** |
+| estado inteiro a cada lance | 26.707 | 74 s |
+| patch a cada lance | 5.866 | 7,7 s |
+| patch a cada 500 ms | 2.135 | 170 ms |
+| o menor (patch ou estado) a cada 500 ms | 2.132 | 80 ms |
+| **estado inteiro a cada 500 ms (adotado, com limitador)** | **2.797** | **80 ms** |
 
-O placar: 1 frame/s, 292 B/s.
+**O limitador é indispensável.** Sem ele, estado inteiro a cada lance satura o
+enlace e o gol espera dezenas de segundos.
 
-**E2, isolamento:** 30 gols durante uma rajada de 200 lances/s, num enlace de
-16 KB/s (celular com sinal ruim), modelo FIFO:
+**Com o limitador, o estado inteiro custa um pouco mais de banda que o patch:**
++31% nesse experimento, que começa com o estado vazio. No benchmark, em que todos
+os jogadores já estão no estado, foram 4.441 contra 2.423 B/s, quase 2×. Em
+troca, o desenho fica bem mais simples:
 
-| No enlace | gol p50 | gol p95 | gol máx |
-| --- | --- | --- | --- |
-| só o placar | 18 ms | 18 ms | 35 ms |
-| placar + estado inteiro a cada lance | 53 s | 74 s | 75 s |
-| placar + patch a cada lance | 4,2 s | 7,7 s | 8,0 s |
-| placar + patch a cada 500 ms | 18 ms | 170 ms | 176 ms |
-| placar + estado inteiro a cada 500 ms | 18 ms | 80 ms | 80 ms |
-| **placar + o menor por janela (adotado)** | **18 ms** | **80 ms** | **80 ms** |
+- **Sem lacuna nem recuperação:** um frame perdido é corrigido pelo próximo; não
+  existem `from`, `CHECKPOINT` nem snapshot de recuperação.
+- **Retenção possível:** o último frame pode ser retido e reenviado por quem está
+  no meio (Router, edge). Reenviar um patch antigo não serve para nada.
+- **Cliente com uma regra só,** igual nos dois canais (`StateSync`).
 
-Conclusões:
+Se o estado crescer muito (dezenas de métricas por jogador, mapa de calor) e a
+banda dos clientes móveis pesar, o patch volta a compensar. O hub mantém o modo
+`delta` para que essa comparação continue reproduzível.
 
-- **Agrupar por janela é o que protege o gol.** Mandar estatísticas a cada
-  lance satura o enlace, e o gol espera segundos atrás delas, com stream único ou
-  separado, se o mesmo cliente assina as duas no mesmo enlace.
-- **Na rajada, o patch fica maior que o estado.** Quando quase todos os campos
-  mudam numa janela, a lista `{path, value}` é mais verbosa que o estado inteiro
-  (p95 170 ms contra 80 ms). Daí a política adotada: por janela, envia o menor.
-  Em jogo normal ela tem o tamanho do patch; na rajada, o do estado.
-- **Separar elimina o atraso para quem não precisa de estatísticas** (18 ms).
-  Para quem precisa das duas no mesmo enlace, o que limita o atraso é a política
-  das estatísticas, não a separação.
+### O limitador
 
-**Sistema real** (`npm run bench`, pelo edge, 150 clientes, rajada de 200
-lances/s): placar p50 10 ms / p99 20 ms, estatísticas p50 508 ms, um stream por
-canal no subgraph para todos os clientes, nenhum snapshot durante o jogo, e os
-clientes só de placar receberam 0 B de estatísticas.
+O hub, no modo `state` com `throttleMs`:
+- **Calmo:** se nada saiu nos últimos 500 ms, o frame sai na hora (um lance
+  isolado chega em ms).
+- **Rajada:** senão, sai no fim da janela, com o estado mais recente. Na rajada,
+  isso dá no máximo 2 frames/s.
+- **`committedAt`:** é o do commit mais antigo ainda não enviado, então a
+  latência medida é a do pior dado do frame.
+
+## Cliente (`StateSync`)
+
+1. Abre a subscription (deduplicada). Em paralelo, busca opcionalmente a base
+   `minVersion: 0`, possivelmente antiga, só para desenhar a tela na hora como
+   provisória.
+2. A cada frame: se a versão é maior que a local, substitui o estado; se não,
+   ignora. Isso cobre frames retidos mais velhos, periódicos atrasados e
+   duplicatas.
+3. Fica sincronizado no primeiro frame de cada conexão.
+4. Queda ou 5 s sem frames: reconecta mantendo o estado. O próximo frame resolve.
+
+## Retenção do último frame (protótipo do plugin)
+
+O Router não tem configuração para reenviar o último evento a quem entra num
+upstream deduplicado:
+- **Rhai:** não guarda estado entre requisições.
+- **Coprocessor:** não cria um frame quando o cliente se conecta.
+
+Seria um **plugin nativo em Rust** num build customizado. `scripts/edge.mjs`
+implementa esse comportamento para medir:
+
+- **Retenção:** guarda o último frame de cada upstream deduplicado e o escreve
+  primeiro para quem entra. O frame retido some junto com o upstream, quando o
+  último assinante sai.
+- **Chave com identidade:** os headers configurados (ex.: `authorization`) entram
+  na chave de deduplicação, de retenção e de cache de queries. Clientes com
+  identidades diferentes não compartilham upstream nem frame retido.
+- **Correção:** só funciona porque todo frame traz o estado inteiro e uma versão.
+  Um frame retido mais velho que um em trânsito é ignorado pelo cliente.
+
+Medido (`tests/scale.test.mjs`, frame periódico de 2 s): quem entra numa partida
+parada fica sincronizado em **12 ms com retenção, contra 1.997 ms sem**.
+
+## Várias instâncias
+
+```
+clientes ──LB──┬── instância A ─ 1 upstream por (canal, partida) que A tem em uso ─┐
+               ├── instância B ─ idem                                               ├── subgraphs
+               └── instância C ─ idem                                               ┘
+```
+
+- **Deduplicação por instância:** os streams no subgraph são **instâncias ×
+  partidas ativas × canais**, não clientes. Medido: 30 clientes em 2 partidas
+  atrás de 3 instâncias geraram 6 streams por canal.
+- **Retenção por instância, sem compartilhar:** o frame retido existe exatamente
+  quando é necessário. Quem é o primeiro numa instância abre o upstream e recebe o
+  frame inicial do subgraph; quem entra num upstream já aberto recebe o frame que
+  essa instância já guardou.
+- **Troca de instância (reconexão pelo LB):** a nova instância pode ter um frame
+  retido um pouco mais velho que o do cliente. A versão impede a regressão; o
+  teste de propriedade e o teste de queda afirmam isso.
+- **Queda de uma instância:** os clientes reconectam pelo balanceador e caem numa
+  instância viva, que já tem o frame retido. Medido: todos sincronizados de novo
+  em ~150 ms, sem regressão de versão.
+- **Sem afinidade de sessão.**
+- **O que é compartilhado:** o response cache das queries (Redis, no Router), já
+  que o contrato `minVersion` é verdadeiro em qualquer instância. E, se os
+  subgraphs tiverem réplicas, um bus que leve cada commit aos hubs de todas elas.
+  O frame periódico lê o estado do banco e corrige perdas desse bus.
 
 ## Consistência entre canais
 
-Cada canal é consistente consigo mesmo: estado exato numa versão. Entre canais
-não há transação: logo depois de um gol, a tela pode mostrar o placar novo e as
-estatísticas da janela anterior por até ~0,5 s. Por isso o gol fica só no placar
-e as estatísticas não contam gols. Se uma tela precisar de um número que dependa
-dos dois, ou ele pertence a um único canal, ou a tela aceita essa defasagem.
+Cada canal é exato numa versão; entre canais não há transação. As estatísticas
+podem estar até ~0,5 s atrás do placar. Por isso gols ficam só no placar.
 
-## Limites e próximos passos
+## Limites
 
-- **Lista de jogos com muitas partidas:** hoje são N subscriptions de placar (uma
-  por partida, todas deduplicadas). Para dezenas de partidas, um canal por
-  competição (`liveScores(competitionId)`) com o mesmo protocolo de `STATE` por
-  partida reduz conexões.
-- **Autorização:** `matchId` é só um seletor; os headers entram na chave de
-  deduplicação do Router.
-- **Réplicas:** cada subgraph tem um hub em memória; com réplicas, o hub precisa
-  ser alimentado por um bus (Redis, NATS) depois do commit. A versão e o
-  snapshot com `minVersion` cobrem perdas desse bus.
-- **Apollo Router:** a config (`router/router.yaml`) foi validada com o binário
-  2.10, mas não executada (exige licença GraphOS). A deduplicação e o cache foram
-  emulados (`scripts/edge.mjs`); `npm run test:router` roda o mesmo cenário contra
-  um Router licenciado.
+- **Apollo Router não executado aqui:** a deduplicação, o cache e a retenção
+  foram emulados. A config (`router/router.yaml`) foi validada com o binário 2.10,
+  e o plugin de retenção é um esboço; não foi escrito em Rust.
+- **Identidade:** o edge usa a identidade só na chave. Num Router real, a
+  autorização precisa valer no subgraph também.
+- **Lista com muitas partidas:** um canal por competição reduziria o número de
+  subscriptions.
 
 ## Evolução neste branch
 
-1. `15a917e`: feed de pedidos com `after` na subscription (incompatível com a
-   deduplicação).
+1. `15a917e`: feed de pedidos com `after` na subscription, incompatível com a
+   deduplicação.
 2. `0f06630`: stream compartilhado + log de eventos paginado e cacheável.
-3. Atual: domínio esportivo, dois canais com políticas próprias, só snapshots
-   com versão mínima (sem histórico), frames adaptativos nas estatísticas.
+3. `9a87874`: domínio esportivo, dois canais, patch adaptativo nas estatísticas.
+4. Atual: estado inteiro com limitador nos dois canais, retenção do último frame
+   e várias instâncias atrás de um balanceador.

@@ -7,8 +7,8 @@ mkdirSync(dataDir, { recursive: true });
 const app = await startSubgraphs({
   dataDir,
   ports: { scores: Number(process.env.SCORES_PORT ?? 4001), catalog: Number(process.env.CATALOG_PORT ?? 4002), stats: Number(process.env.STATS_PORT ?? 4003) },
-  scoreboard: { checkpointMs: Number(process.env.SCOREBOARD_CHECKPOINT_MS ?? 1000) },
-  stats: { checkpointMs: Number(process.env.STATS_CHECKPOINT_MS ?? 1000), coalesceMs: Number(process.env.STATS_COALESCE_MS ?? 500) }
+  scoreboard: { periodicMs: Number(process.env.SCOREBOARD_PERIODIC_MS ?? 1000) },
+  stats: { periodicMs: Number(process.env.STATS_PERIODIC_MS ?? 1000), throttleMs: Number(process.env.STATS_THROTTLE_MS ?? 500) }
 });
 console.log(`scores  http/ws://localhost:${app.ports.scores}/graphql  (métricas em /metrics)`);
 console.log(`catalog http://localhost:${app.ports.catalog}/graphql`);

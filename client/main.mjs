@@ -1,4 +1,4 @@
-import { StateSync, DeltaSync, runSync } from './sync.mjs';
+import { createSync, runSync } from './sync.mjs';
 import { snapshotApi, transports } from './transport.mjs';
 import { clockSeconds } from '../src/sports.mjs';
 
@@ -13,8 +13,8 @@ const controller = new AbortController();
 process.once('SIGINT', () => controller.abort());
 
 const syncs = {
-  scoreboard: channels.includes('scoreboard') ? new StateSync({ matchId, api: snapshotApi(url, 'scoreboard', matchId) }) : null,
-  stats: channels.includes('stats') ? new DeltaSync({ matchId, api: snapshotApi(url, 'stats', matchId) }) : null
+  scoreboard: channels.includes('scoreboard') ? createSync('scoreboard', { matchId, api: snapshotApi(url, 'scoreboard', matchId) }) : null,
+  stats: channels.includes('stats') ? createSync('stats', { matchId, api: snapshotApi(url, 'stats', matchId) }) : null
 };
 const mmss = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 function render() {

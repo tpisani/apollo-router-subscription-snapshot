@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startStack } from '../scripts/stack.mjs';
 import { verify } from '../scripts/verify.mjs';
-import { StateSync, DeltaSync, runSync } from '../client/sync.mjs';
+import { createSync, runSync } from '../client/sync.mjs';
 import { snapshotApi, transports } from '../client/transport.mjs';
 import { scoreboardOps, applyStatEvents, playGenerator } from '../src/sports.mjs';
 
@@ -13,7 +13,7 @@ async function until(predicate, message, ms = 10_000) {
 }
 
 let stack;
-test.before(async () => { stack = await startStack({ scoreboard: { checkpointMs: 300 }, stats: { checkpointMs: 300, coalesceMs: 200 } }); });
+test.before(async () => { stack = await startStack({ scoreboard: { periodicMs: 300 }, stats: { periodicMs: 300, throttleMs: 200 } }); });
 test.after(async () => { await stack?.stop(); });
 
 test('edge com deduplicação e cache de tudo: placar e estatísticas em canais separados', { timeout: 60_000 }, async () => {
@@ -36,7 +36,7 @@ test('upstreams no edge: um por canal e partida, independente do número de clie
   const controller = new AbortController();
   const runs = [];
   for (const matchId of matchIds) for (let i = 0; i < 5; i++) for (const channel of ['scoreboard', 'stats']) {
-    const sync = new (channel === 'scoreboard' ? StateSync : DeltaSync)({ matchId, api: snapshotApi(stack.edge.url, channel, matchId) });
+    const sync = createSync(channel, { matchId, api: snapshotApi(stack.edge.url, channel, matchId) });
     runs.push({ sync, done: runSync({ sync, signal: controller.signal, connect: signal => transports.multipart(stack.edge.url, channel, matchId, { signal }) }) });
   }
   try {
@@ -51,8 +51,8 @@ test('reinício dos subgraphs com clientes conectados: os dois canais se recuper
   const matchId = `restart-${Date.now()}`;
   const next = playGenerator(matchId, 9);
   const controller = new AbortController();
-  const score = new StateSync({ matchId, api: snapshotApi(stack.edge.url, 'scoreboard', matchId) });
-  const stats = new DeltaSync({ matchId, api: snapshotApi(stack.edge.url, 'stats', matchId) });
+  const score = createSync('scoreboard', { matchId, api: snapshotApi(stack.edge.url, 'scoreboard', matchId) });
+  const stats = createSync('stats', { matchId, api: snapshotApi(stack.edge.url, 'stats', matchId) });
   const runs = [[score, 'scoreboard'], [stats, 'stats']].map(([sync, channel]) =>
     runSync({ sync, signal: controller.signal, wait: () => 100, connect: signal => transports.multipart(stack.edge.url, channel, matchId, { signal }) }));
   try {

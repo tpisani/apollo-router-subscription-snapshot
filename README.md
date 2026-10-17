@@ -7,22 +7,29 @@ todas as queries. Roda sem licença com o Hive Gateway e um edge que emula a
 deduplicação e o cache do Router.
 
 - **Placar:** cada mudança sai na hora, com o estado inteiro (~150 B). O gol
-  chega em ~10 ms. Quem entra depois fica certo no primeiro frame, sem query.
-- **Estatísticas:** ~20 lances/s viram 2 frames/s, cada um com o patch ou o
-  estado, o que for menor. Perdeu algo? Um snapshot com versão mínima resolve,
-  sem histórico.
+  chega em ~10 ms.
+- **Estatísticas:** também com o estado inteiro, com um limitador: na hora quando
+  o jogo está calmo, e no máximo 2 frames/s numa rajada.
+- **Uma regra só no cliente:** fica com o frame de maior versão. Não há lacuna,
+  histórico nem query de recuperação.
+- **Retenção do último frame** (protótipo de um plugin do Router): quem entra num
+  upstream já aberto recebe o estado na hora (12 ms, contra ~2 s esperando o
+  frame periódico).
+- **Várias instâncias:** cada uma deduplica e retém os seus upstreams; uma
+  instância que cai é absorvida pelas outras em ~150 ms, sem regressão de versão.
 - **Uma lista de jogos assina só o placar** e não recebe nenhum byte de
   estatísticas.
 
-Por que dois canais, com os experimentos que sustentam a decisão:
+Por que dois canais, estado inteiro, retenção e várias instâncias, com os experimentos:
 [`docs/design.md`](docs/design.md). O que foi executado:
 [`docs/validation.md`](docs/validation.md).
 
 ## Comece por aqui
 
-- **Políticas de envio por canal (hub, agrupamento, fila):** [`src/channels.mjs`](src/channels.mjs)
-- **Patches por valor final (idempotentes e aplicáveis com sobreposição):** [`src/patch.mjs`](src/patch.mjs)
-- **Cliente (`StateSync` para o placar, `DeltaSync` para as estatísticas):** [`client/sync.mjs`](client/sync.mjs)
+- **Políticas de envio por canal (hub, limitador, frame periódico, fila):** [`src/channels.mjs`](src/channels.mjs)
+- **Cliente (`StateSync`, igual nos dois canais):** [`client/sync.mjs`](client/sync.mjs)
+- **Retenção, chave com identidade e cache (protótipo do plugin do Router):** [`scripts/edge.mjs`](scripts/edge.mjs)
+- **Várias instâncias atrás de um balanceador:** [`scripts/balancer.mjs`](scripts/balancer.mjs), [`tests/scale.test.mjs`](tests/scale.test.mjs)
 - **Domínio (placar, relógio, estatísticas):** [`src/sports.mjs`](src/sports.mjs)
 - **Schemas dos subgraphs `scores`, `stats` e `catalog`:** [`src/schemas.mjs`](src/schemas.mjs)
 - **Experimentos de desenho:** [`tests/experiments.test.mjs`](tests/experiments.test.mjs), [`scripts/experiments.mjs`](scripts/experiments.mjs)
@@ -34,9 +41,9 @@ Por que dois canais, com os experimentos que sustentam a decisão:
 subscription Scoreboard($matchId: ID!) {
   scoreboardUpdates(matchId: $matchId) { version committedAt state { status home away clock { running seconds updatedAt } } }
 }
-# Estatísticas: um frame por janela de 500 ms
+# Estatísticas: estado inteiro, no máximo 1 frame a cada 500 ms numa rajada
 subscription Stats($matchId: ID!) {
-  statsUpdates(matchId: $matchId) { kind from version patch { path value } state { home { possession shots } } }
+  statsUpdates(matchId: $matchId) { version committedAt state { home { possession shots } away { possession shots } } }
 }
 # Snapshots cacheáveis: "um estado em alguma versão >= minVersion"
 query { scoreboard(matchId: "m1", minVersion: 0) { version state { home away } } }
@@ -58,7 +65,7 @@ npm ci
 npm run compose-schema   # gera gateway/supergraph.graphql
 SIMULATE=m1 npm start    # subgraphs scores :4001, catalog :4002, stats :4003, simulando a partida m1
 npm run gateway          # Hive Gateway :4000
-npm run edge             # dedup + cache de queries (pior caso) :4010, multipart como o Router
+npm run edge             # dedup + retenção + cache de queries (pior caso) :4010, multipart como o Router
 ```
 
 Em outro terminal:
@@ -86,8 +93,9 @@ npm run test:router      # o mesmo cenário dos testes, contra o Router
 ## Testes, experimentos e benchmark
 
 ```bash
-npm test                 # 30 testes: domínio, canais, cliente, experimentos e ponta a ponta
+npm test                 # 35 testes: domínio, canais, cliente, experimentos, ponta a ponta e várias instâncias
 npm run bench            # partida simulada pelo edge: 100 clientes só de placar + 50 completos
+EDGES=3 npm run bench    # o mesmo com 3 instâncias atrás de um balanceador
 SCORE_ONLY=0 FULL=200 STORM_RATE=400 npm run bench
 ```
 
@@ -96,6 +104,8 @@ SCORE_ONLY=0 FULL=200 STORM_RATE=400 npm run bench
 - Sem autenticação: `matchId` é só um seletor.
 - Hubs em memória: um processo por subgraph. Com réplicas, alimente o hub por um
   bus depois do commit.
+- A retenção é um protótipo no edge; no Apollo Router ela exigiria um plugin
+  nativo (Rust) num build customizado.
 - Placar e estatísticas não são consistentes entre si numa transação: as
   estatísticas podem estar até ~0,5 s atrás do placar (ver
   [design](docs/design.md#consistência-entre-canais)).

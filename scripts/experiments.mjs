@@ -24,10 +24,10 @@ export function simulateMatch({ tick, now, seconds = 60, eventsPerSecond = 20, s
   const hubs = [];
   let scoreHub;
   const scores = new Store(':memory:', { initial: initialScoreboard, clock: now, onCommit: c => { out.commits.scoreboard.push(c); scoreHub.publish(c); } });
-  scoreHub = new ChannelHub({ store: scores, mode: 'state', checkpointMs: 1000 });
+  scoreHub = new ChannelHub({ store: scores, mode: 'state', periodicMs: 1000 });
   const stats = new Store(':memory:', { initial: initialStats, clock: now, onCommit: c => { out.commits.stats.push(c); for (const h of hubs) h.publish(c); } });
   for (const [name, policy] of Object.entries(STATS_POLICIES)) {
-    const hub = new ChannelHub({ store: stats, mode: 'delta', checkpointMs: 1000, coalesceMs: policy.coalesceMs, adaptive: policy.adaptive ?? false });
+    const hub = new ChannelHub({ store: stats, mode: 'delta', periodicMs: 1000, coalesceMs: policy.coalesceMs, adaptive: policy.adaptive ?? false });
     hubs.push(hub);
     hub.subscribe(matchId, frame => {
       // Política "estado inteiro": no instante do frame o store está exatamente na versão dele.

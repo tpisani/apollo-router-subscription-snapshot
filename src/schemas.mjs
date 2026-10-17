@@ -36,31 +36,25 @@ export const scoresSDL = `
   }
 `;
 
-// Estatísticas: subgraph próprio, estado maior, frames agrupados com só o que mudou.
+// Estatísticas: subgraph próprio, estado maior, frames de estado inteiro limitados a 2/s.
 export const statsSDL = `
   ${link}
   enum Side { HOME AWAY }
   enum StatType { TOUCH PASS SHOT SHOT_ON_TARGET CORNER FOUL }
-  enum StatsFrameKind { DELTA STATE CHECKPOINT }
+  enum StatsFrameKind { STATE }
 
   type TeamStats { possession: Int!, touches: Int!, shots: Int!, shotsOnTarget: Int!, passes: Int!, corners: Int!, fouls: Int! }
   type PlayerStats { id: ID!, touches: Int!, passes: Int!, shots: Int! }
   type MatchStats { home: TeamStats!, away: TeamStats!, players: [PlayerStats!]! }
   type StatsSnapshot { matchId: ID!, version: Int!, state: MatchStats! }
-  "Valor final de um campo, por exemplo path [\\"home\\", \\"shots\\"] ou [\\"players\\", \\"h7\\", \\"passes\\"]."
-  type StatPatch { path: [String!]!, value: Int }
   type StatsFrame {
     matchId: ID!
     kind: StatsFrameKind!
-    "DELTA: versão inicial da janela. Aplicável se from <= versão local < version."
-    from: Int
     version: Int!
-    "Epoch ms do commit mais antigo da janela."
+    "Epoch ms do commit mais antigo incluído no frame; nulo nos frames periódicos."
     committedAt: Float
-    "DELTA: valores finais dos campos alterados na janela."
-    patch: [StatPatch!]
-    "STATE: o estado inteiro, quando é menor que o patch (rajadas). Substitui tudo."
-    state: MatchStats
+    "O estado inteiro. O frame de maior versão substitui os anteriores."
+    state: MatchStats!
   }
   input StatEventInput { side: Side!, playerId: ID!, type: StatType! }
 
@@ -73,7 +67,7 @@ export const statsSDL = `
     recordStats(matchId: ID!, events: [StatEventInput!]!): Int!
   }
   type Subscription {
-    "Uma janela de 500 ms por frame (patch ou estado, o menor) e checkpoint a cada segundo. Deduplicável."
+    "Estado inteiro: na hora quando calmo, no máximo 1 a cada 500 ms numa rajada, e a cada segundo. Deduplicável."
     statsUpdates(matchId: ID!): StatsFrame!
   }
 `;

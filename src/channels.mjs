@@ -2,24 +2,25 @@ import { mergePatches } from './patch.mjs';
 
 // Um canal = um documento versionado por partida + uma política de envio.
 //
-// mode 'state' (placar: pequeno, raro, urgente)
-//   STATE { version, state }  a cada commit, na hora, e a cada checkpointMs.
-//   Cada frame traz o estado inteiro: o mais novo substitui os anteriores, então
-//   perda, duplicata e late joiner se resolvem com o próximo frame, sem query.
+// mode 'state' (usado pelos dois canais: placar e estatísticas)
+//   STATE { version, state }: o estado inteiro. O mais novo substitui os anteriores,
+//   então perda, duplicata e late joiner se resolvem com o próximo frame, sem query,
+//   e o último frame pode ser retido e reenviado por quem estiver no meio (edge/Router).
+//   throttleMs = 0: um frame por commit, na hora (placar).
+//   throttleMs > 0: limitador. Se nada saiu nos últimos throttleMs, o frame sai na
+//   hora; senão sai no fim da janela com o estado mais recente (estatísticas: no
+//   máximo 2 frames/s numa rajada, latência de ms em jogo calmo).
+//   A cada periodicMs sai um STATE mesmo sem mudança: sinal de vida e estado para
+//   quem entrou num upstream já aberto.
 //
-// mode 'delta' (estatísticas: maior, frequente, tolera ~coalesceMs)
-//   Um frame por janela de coalesceMs, o que for menor (adaptive):
-//     DELTA { from, version, patch } valores finais dos campos alterados na janela;
-//     STATE { version, state }       o estado inteiro, quando quase tudo mudou
-//                                    (numa rajada o patch fica maior que o estado).
-//   CHECKPOINT { version }          a cada checkpointMs: até onde o stream entregou.
-//   O cliente aplica DELTA se from <= sua versão < version; se from > sua versão,
-//   pede um snapshot com minVersion (sem histórico).
+// mode 'delta' (só nos experimentos de comparação, scripts/experiments.mjs)
+//   DELTA { from, version, patch } por janela de coalesceMs (ou STATE, se menor) e
+//   CHECKPOINT { version } periódico. Ficou registrado como alternativa medida.
 //
 // Os frames são iguais para todos os assinantes da partida: o Router deduplica.
 export class ChannelHub {
-  constructor({ store, mode, checkpointMs = 1000, coalesceMs = 0, adaptive = true, onFrame = () => {} }) {
-    Object.assign(this, { store, mode, checkpointMs, coalesceMs, adaptive, onFrame });
+  constructor({ store, mode, periodicMs = 1000, throttleMs = 0, coalesceMs = 0, adaptive = true, now = () => Date.now(), onFrame = () => {} }) {
+    Object.assign(this, { store, mode, periodicMs, throttleMs, coalesceMs, adaptive, now, onFrame });
     this.keys = new Map();
   }
 
@@ -27,8 +28,8 @@ export class ChannelHub {
     let entry = this.keys.get(key);
     if (!entry) {
       const doc = this.store.read(key);
-      entry = { listeners: new Set(), latest: doc, delivered: doc.version, pending: null, flushTimer: null };
-      entry.timer = setInterval(() => this.#emit(key, this.#checkpoint(entry, key)), this.checkpointMs);
+      entry = { listeners: new Set(), latest: doc, delivered: doc.version, pending: null, flushTimer: null, lastEmit: 0, unsentSince: null };
+      entry.timer = setInterval(() => this.#emit(key, this.#checkpoint(entry, key)), this.periodicMs);
       this.keys.set(key, entry);
     }
     entry.listeners.add(listener);
@@ -55,7 +56,10 @@ export class ChannelHub {
     if (!entry) return;
     entry.latest = { version: change.version, state: change.state };
     if (this.mode === 'state') {
-      this.#emit(change.key, { matchId: change.key, kind: 'STATE', version: change.version, state: change.state, committedAt: change.committedAt });
+      entry.unsentSince ??= change.committedAt;
+      const wait = this.throttleMs - (this.now() - entry.lastEmit);
+      if (wait <= 0 && !entry.flushTimer) this.#flushState(change.key);                    // calmo: na hora
+      else entry.flushTimer ??= setTimeout(() => this.#flushState(change.key), Math.max(0, wait)); // rajada: fim da janela
       return;
     }
     if (entry.pending) {
@@ -66,6 +70,15 @@ export class ChannelHub {
       if (this.coalesceMs > 0) entry.flushTimer = setTimeout(() => this.#flush(change.key), this.coalesceMs);
     }
     if (this.coalesceMs === 0) this.#flush(change.key);
+  }
+
+  #flushState(key) {
+    const entry = this.keys.get(key);
+    if (!entry) return;
+    clearTimeout(entry.flushTimer); entry.flushTimer = null;
+    // committedAt = o commit mais antigo ainda não enviado: mede o pior atraso do frame.
+    const committedAt = entry.unsentSince; entry.unsentSince = null; entry.lastEmit = this.now();
+    this.#emit(key, { matchId: key, kind: 'STATE', version: entry.latest.version, state: entry.latest.state, committedAt });
   }
 
   #flush(key) {

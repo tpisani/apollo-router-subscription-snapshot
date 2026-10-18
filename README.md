@@ -124,6 +124,5 @@ SCORE_ONLY=0 FULL=200 STORM_RATE=400 npm run bench
 - Placar e estatísticas não são consistentes entre si numa transação: as
   estatísticas podem estar até ~0,5 s atrás do placar (ver
   [design](docs/design.md#consistência-entre-canais)).
-- O Router com licença ainda não foi executado aqui: o plugin rodou no pipeline do
-  Router pelo `TestHarness` (deduplicação, WebSocket e multipart reais); o binário
-  com GraphOS e o response cache, não. Ver [validação](docs/validation.md).
+- O plugin rodou com o Router de verdade e GraphOS, em 3 instâncias; o response
+  cache com Redis ainda não. Ver [validação](docs/validation.md).

@@ -57,6 +57,22 @@ Ambiente: Linux, Node.js 22.22.0, Hive Gateway 2.15.2, Apollo Router 2.10.0
   12 clientes com uma instância derrubada, 8 migraram e todos voltaram em 146 ms,
   sem regressão; limpeza.
 
+## Apollo Router de verdade com GraphOS (`npm run test:router-real`)
+
+O binário de `router-plugin/` (2.10.5 + plugin) com uma chave do GraphOS (plano
+gratuito, graph só de teste), 3 instâncias com retenção atrás do balanceador e 1
+sem, contra os subgraphs Node; frame periódico de 3 s. Só as subscriptions
+passaram pelos routers; nenhuma bateu no limite do plano gratuito.
+
+| Verificação | Resultado |
+| --- | --- |
+| Deduplicação por instância | 24 clientes em 2 partidas: **3 streams por canal e partida** no subgraph (um por instância) |
+| Late joiner com o plugin | **4–10 ms**, com o frame retido nas 3 rodadas |
+| Late joiner sem o plugin | **2.832–2.841 ms**, esperando o periódico, sem frame retido |
+| Identidade | tokens diferentes: 2 streams; só o cliente com o mesmo token recebeu o frame retido |
+| Instância derrubada (SIGKILL) no meio do jogo | 12 clientes, 8 reconectaram pelo balanceador; todos sincronizados de novo em **142 ms**; nenhuma versão regrediu; estado final igual ao banco |
+| Limpeza | sem assinantes, nenhum stream no subgraph |
+
 ## Plugin do Router (`router-plugin/`, `poc.retain_last_frame`)
 
 - **`cargo test --release` (7):** o marcador passa intacto; o primeiro assinante
@@ -126,11 +142,9 @@ de estatísticas no mesmo benchmark. O estado inteiro custa ~1,8× em banda aqui
 
 ## Não verificado
 
-- **O binário com GraphOS:** sem chave, ele não inicia. Pronto para rodar com
-  ela: `npm run test:router-real` (3 routers com o plugin, 1 sem, balanceador e
-  uma instância derrubada no meio), ou o perfil `apollo-plugin` do compose numa
-  máquina local. O `TestHarness` cobre uma instância; várias instâncias
-  do Router de verdade e o response cache com Redis ainda não rodaram.
+- **Response cache com Redis** (`--profile apollo`) com o Router licenciado.
+- **O perfil `apollo-plugin` do compose com a chave:** os containers não alcançam
+  o GraphOS nesta sessão; o mesmo cenário rodou com os binários no host.
 - **Balanceador real** (ALB, NGINX, Envoy): o do teste é um round-robin simples
   com streaming. Num LB real, confira o timeout de ociosidade (maior que o frame
   periódico) e que as respostas multipart não são bufferizadas.

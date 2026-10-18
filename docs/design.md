@@ -128,7 +128,9 @@ Por isso é um **plugin nativo em Rust** num build customizado
 
 Medido no pipeline do Router (`npm run test:router-harness`, frame periódico de
 3 s): o late joiner recebeu o estado em **1 ms com o plugin, contra 2.799 ms
-sem**, com um único stream no subgraph para os dois clientes. No emulador
+sem**, com um único stream no subgraph para os dois clientes. Com o Router de
+verdade e GraphOS, em 3 instâncias (`npm run test:router-real`): 4–10 ms contra
+~2.835 ms, e 142 ms para todos voltarem após derrubar uma instância. No emulador
 (`tests/scale.test.mjs`, periódico de 2 s): 12 ms contra 1.997 ms.
 
 ## Várias instâncias
@@ -165,11 +167,10 @@ podem estar até ~0,5 s atrás do placar. Por isso gols ficam só no placar.
 
 ## Limites
 
-- **Apollo Router com licença não executado aqui:** o plugin rodou no pipeline do
-  Router pelo `TestHarness` do crate (deduplicação, WebSocket e multipart reais,
-  uma instância). Várias instâncias do binário com GraphOS atrás de um
-  balanceador estão prontas (`npm run test:router-real`), mas dependem da chave;
-  o response cache com Redis (`--profile apollo`) também.
+- **Response cache não executado com o Router licenciado:** o plugin rodou de
+  verdade, em 3 instâncias com GraphOS (`npm run test:router-real`, ver
+  [validação](validation.md)); o response cache com Redis (`--profile apollo`),
+  não.
 - **Plugin sem suporte da Apollo:** é preciso recompilar a cada versão do Router e
   acompanhar a forma interna do stream de subscription.
 - **Identidade:** o edge usa a identidade só na chave. Num Router real, a

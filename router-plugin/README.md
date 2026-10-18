@@ -1,6 +1,6 @@
 # Router customizado com `poc.retain_last_frame`
 
-Apollo Router 2.10.5 com um plugin nativo que guarda o último evento de cada
+Apollo Router 2.18.0 com um plugin nativo que guarda o último evento de cada
 subscription deduplicada. Quem entra num upstream já aberto recebe esse estado na
 hora, em vez de esperar o próximo frame do subgraph.
 
@@ -29,7 +29,7 @@ plugins:
 
 ## Compilar e testar (sem licença)
 
-Precisa de Rust 1.94.1+ (exigido pelas dependências do `Cargo.lock`; testado com 1.97) e `protoc` (`apt-get install protobuf-compiler`). A primeira
+Precisa de Rust 1.97.1 (o mínimo do apollo-router 2.18.0, fixado em `rust-toolchain.toml`; o rustup instala sozinho) e `protoc` (`apt-get install protobuf-compiler libprotobuf-dev`). A primeira
 compilação do Router leva ~20 min.
 
 ```bash

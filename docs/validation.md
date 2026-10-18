@@ -1,7 +1,35 @@
 # Validação realizada
 
-Ambiente: Linux, Node.js 22.22.0, Hive Gateway 2.15.2, Apollo Router 2.10.0
-(validação de config), apollo-router 2.10.5 com o plugin (Rust 1.97), Docker 29.8.
+Ambiente: Linux, Node.js 22.22.0, Hive Gateway 2.15.2, Docker 29.8; apollo-router
+**2.18.0** com o plugin (Rust 1.97.1) e a imagem oficial v2.18.0. As seções abaixo
+desta foram medidas com a 2.10.5, antes da atualização, e foram refeitas na 2.18.0
+com os mesmos resultados (próxima seção).
+
+## Atualização para a 2.18.0
+
+- **Plugin:** compila sem mudar o código (`cargo build --release --locked`).
+- **Testes do plugin:** os 8 de unidade e os 4 no pipeline do Router passam. O
+  cliente que entra depois recebe o estado em 1 ms com retenção e em 2.797 ms sem.
+- **`npm test`:** 44 aprovados.
+- **Configs:** `router config validate` aceita as três configs migradas, tanto no
+  binário com o plugin quanto na imagem oficial v2.18.0 (`router.yaml`).
+  `router config upgrade` não aponta mais nada.
+- **Imagem Docker** do plugin (`rust:1.97.1-bookworm`): compila.
+- **Router licenciado** (`npm run test:router-real`, 3 instâncias + 1 sem plugin):
+  passou nos dois modos.
+
+| | passthrough | callback |
+| --- | --- | --- |
+| Deduplicação (24 clientes, 2 partidas) | 3 streams por canal e partida | 3 |
+| Late joiner com o plugin | 5–6 ms | 10–12 ms |
+| Late joiner sem o plugin | ~2.840 ms¹ | ~2.843 ms |
+| Instância derrubada | 8 reconectaram, 144 ms | 8, 158 ms |
+| Ciclo de vida (agendada, FULL_TIME com 7 clientes, depois do fim, LIVE antigo) | tudo certo, 0 reconexões | igual |
+
+¹ Numa das três rodadas sem plugin o cliente recebeu o estado em 9 ms. É o mesmo
+desvio já registrado no modo callback na 2.10.5, agora visto no passthrough. A
+causa não foi investigada.
+
 
 ## Testes (`npm test`: 44 aprovados)
 
@@ -162,7 +190,7 @@ não houver deduplicação.
   propósito, o GraphOS responde `ACCESS_DENIED`: o binário no host alcança o
   uplink pelo proxy da sessão. `npm run test:router-real` falha nesse ponto com
   a mensagem do Router, sem deixar processos.
-- **Imagem Docker** (`router-plugin/Dockerfile`, Rust 1.97): compila e
+- **Imagem Docker** (`router-plugin/Dockerfile`, na época com Rust 1.97): compila e
   `config validate` passa dentro dela. O perfil `apollo-plugin` sobe todos os
   serviços, mas aqui, sem proxy nos containers, os routers ficam tentando buscar
   a licença (`fetch failed from all 2 uplink endpoints`) e não abrem a porta. Por

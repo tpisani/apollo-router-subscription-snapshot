@@ -1,5 +1,5 @@
-# Apollo Router 2.10 (exige licença GraphOS para subscriptions federadas e
-# response cache). Validado com `router config validate`; não executado sem licença.
+# Apollo Router 2.18 (exige licença GraphOS para subscriptions federadas e
+# response cache). Validado com `router config validate` da 2.18.0.
 supergraph:
   listen: 0.0.0.0:4100
   path: /graphql
@@ -9,7 +9,9 @@ subscription:
   # statsUpdates(matchId) não têm estado por cliente, então um upstream por
   # canal e partida atende todos os clientes.
   deduplication:
-    enabled: true
+    # Desde a 2.15, por subgraph ou para todos (all).
+    all:
+      enabled: true
   mode:
     passthrough:
       subgraphs:

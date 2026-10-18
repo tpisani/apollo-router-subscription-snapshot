@@ -14,7 +14,8 @@ Método (out/2026):
 
 - Um minor novo a cada ~4 semanas: 2.10 (dez/2025) a 2.18 (set/2026), oito minors
   em dez meses.
-- A 2.10 ainda recebe patches (2.10.5 em jul/2026); é a linha que este POC usa.
+- A 2.10 ainda recebe patches (2.10.5 em jul/2026). Este POC usou a 2.10.5 até
+  ser atualizado para a 2.18.0 (a estável mais recente em out/2026).
 - A versão mínima do Rust subiu 8 vezes entre 2.0 e 2.18 (a 2.18 exige 1.97.1).
 
 ## O que mudou, ponto a ponto
@@ -76,6 +77,19 @@ versões**: ela tem de acompanhar o binário.
   teste com a ordem invertida, sem nenhum erro de compilação. Não mudou em 2.x, e
   `npm run test:router-harness` existe para pegar isso.
 
+## A atualização para a 2.18.0
+
+Feita como descrito abaixo, com o resultado:
+- **Código do plugin:** nenhuma mudança.
+- **Dependência e toolchain:** `apollo-router = "=2.18.0"` e um `Cargo.lock` novo;
+  Rust fixado em 1.97.1 (`router-plugin/rust-toolchain.toml` e
+  `rust:1.97.1-bookworm` no Dockerfile).
+- **Configs:** `router.yaml`, `router-plugin.yaml` e `router-plugin-callback.yaml`
+  migradas à mão, para manter os comentários: `deduplication.all.enabled` e
+  `headers.all.request.operations`. Com isso, `router config upgrade` não tem mais
+  nada a migrar. A imagem oficial do perfil `apollo` também foi para a v2.18.0.
+- **Testes:** os mesmos de antes, todos passando (ver [validação](validation.md)).
+
 ## Como atualizar o Router
 
 1. **Trocar a versão:** `apollo-router = "=X.Y.Z"` no `router-plugin/Cargo.toml`.
@@ -93,9 +107,10 @@ versões**: ela tem de acompanhar o binário.
 Para testar uma versão nova sem mexer na pasta do plugin:
 
 ```bash
-cp -r router-plugin /tmp/plugin-novo && sed -i 's/=2.10.5/=2.18.0/' /tmp/plugin-novo/Cargo.toml
-PLUGIN_DIR=/tmp/plugin-novo CARGO_TOOLCHAIN=1.97.1 npm run test:router-harness
-(cd /tmp/plugin-novo && cargo +1.97.1 build --release)
+# ex.: da 2.18.0 para X.Y.Z, com o Rust mínimo dela (R)
+cp -r router-plugin /tmp/plugin-novo && sed -i 's/=2.18.0/=X.Y.Z/' /tmp/plugin-novo/Cargo.toml
+PLUGIN_DIR=/tmp/plugin-novo CARGO_TOOLCHAIN=R npm run test:router-harness
+(cd /tmp/plugin-novo && cargo +R build --release)
 /tmp/plugin-novo/target/release/router config upgrade router/router-plugin.yaml > /tmp/cfg/router-plugin.yaml   # idem callback
 ROUTER_BIN=/tmp/plugin-novo/target/release/router ROUTER_CONFIG_DIR=/tmp/cfg npm run test:router-real
 ```

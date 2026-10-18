@@ -8,7 +8,7 @@ import { composeSupergraph } from './compose.mjs';
 import { startBalancer } from './balancer.mjs';
 import { verifyRouterScale } from './verify-router-scale.mjs';
 
-// O teste de verdade, sem Docker: o binário de router-plugin/ (apollo-router 2.10.5 +
+// O teste de verdade, sem Docker: o binário de router-plugin/ (apollo-router 2.18.0 +
 // poc.retain_last_frame) com GraphOS, em 3 instâncias com retenção atrás de um
 // balanceador e 1 sem retenção, contra os subgraphs Node. Os processos herdam o
 // ambiente (proxy, CA), o que os containers do compose não fazem numa sessão na nuvem.
@@ -87,7 +87,7 @@ try {
     kill: process.env.KILL === '0' ? undefined : async () => { lb.remove(killed.url); killed.proc.kill('SIGKILL'); },
     log: console.log
   });
-  console.log(JSON.stringify({ router: '2.10.5 + poc.retain_last_frame', modo: mode, instancias: 3, periodicoMs: periodicMs, ...result }, null, 2));
+  console.log(JSON.stringify({ router: '2.18.0 + poc.retain_last_frame', modo: mode, instancias: 3, periodicoMs: periodicMs, ...result }, null, 2));
   console.log(`OK: Apollo Router de verdade com o plugin, em várias instâncias (modo ${mode})`);
   code = 0;
 } catch (error) {

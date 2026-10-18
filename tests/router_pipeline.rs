@@ -1,7 +1,7 @@
 //! In-process integration with the Router pipeline, through the crate's
-//! `TestHarness`: deduplication, WebSocket passthrough to the Node subgraphs and a
-//! real multipart response, with the plugin loaded from the configuration. The
-//! `TestHarness` uses an unrestricted license in tests only; it does not replace
+//! `TestHarness`: deduplication (on, and off in one test), WebSocket passthrough
+//! to the Node subgraphs and a real multipart response, with the plugin loaded
+//! from the configuration. The `TestHarness` uses an unrestricted license in tests only; it does not replace
 //! running the binary with GraphOS (`npm run test:router-scale`).
 //!
 //! Needs the subgraphs from `testbed/` running; `npm run test:router-harness` (in
@@ -35,6 +35,10 @@ fn env(name: &str) -> String {
 }
 
 async fn harness(snapshot: bool) -> router::BoxCloneService {
+    harness_with(snapshot, true).await
+}
+
+async fn harness_with(snapshot: bool, deduplication: bool) -> router::BoxCloneService {
     let supergraph = std::fs::read_to_string(env("SUPERGRAPH")).unwrap();
     let ws = json!({ "path": "/graphql", "protocol": "graphql_ws", "heartbeat_interval": "5s" });
     let passthrough = json!({ "scores": ws, "stats": ws });
@@ -42,7 +46,7 @@ async fn harness(snapshot: bool) -> router::BoxCloneService {
         .schema(&supergraph)
         .with_subgraph_network_requests()
         .configuration_json(json!({
-            "subscription": { "enabled": true, "deduplication": { "enabled": true }, "mode": { "passthrough": { "subgraphs": passthrough } } },
+            "subscription": { "enabled": true, "deduplication": { "enabled": deduplication }, "mode": { "passthrough": { "subgraphs": passthrough } } },
             "headers": { "all": { "request": [{ "propagate": { "named": "authorization" } }] } },
             "include_subgraph_errors": { "all": true },
             "plugins": { "globo.subscription_snapshot": { "enabled": snapshot, "identity_headers": ["authorization"] } }
@@ -288,6 +292,46 @@ async fn without_snapshot_the_late_joiner_waits_for_the_periodic_frame() {
         "without snapshot, it waits for the periodic frame ({late_ms} ms)"
     );
     assert_eq!(upstreams(&match_id).await, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the subgraphs (npm run test:router-harness)"]
+async fn without_deduplication_the_late_joiner_gets_the_snapshot_and_its_own_upstream() {
+    let router = harness_with(true, false).await;
+    let match_id = unique("harness-no-dedup");
+    mutate(&router, START, &match_id).await;
+    let mut a = subscribe(&router, &match_id, None).await;
+    let first = next_frame(&mut a).await;
+    assert!(!is_snapshot(&first));
+    until_upstreams(&match_id, 1).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // The snapshot goes right after the marker, before anything from the new upstream.
+    let mut b = subscribe(&router, &match_id, None).await;
+    let late = next_frame(&mut b).await;
+    assert!(
+        is_snapshot(&late),
+        "the snapshot does not depend on deduplication: {late}"
+    );
+    assert_eq!(version(&late), version(&first));
+    until_upstreams(&match_id, 2).await;
+    let own = next_frame(&mut b).await;
+    assert!(
+        !is_snapshot(&own),
+        "then the initial frame of its own upstream: {own}"
+    );
+    assert_eq!(version(&own), version(&first));
+
+    let goal = mutate(&router, GOAL, &match_id).await["scoreGoal"]["version"]
+        .as_i64()
+        .unwrap();
+    for stream in [&mut a, &mut b] {
+        while version(&next_frame(stream).await) < goal {}
+    }
+
+    drop(a);
+    drop(b);
+    until_upstreams(&match_id, 0).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

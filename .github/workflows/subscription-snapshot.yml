@@ -31,6 +31,13 @@ jobs:
       # The apollo-plugin profile configuration, validated by the binary with the plugin.
       - run: ./target/release/router config validate examples/router/router-plugin.yaml
       - run: ./target/release/router config validate examples/router/router-plugin-callback.yaml
+      # The custom Router example, against the plugin in this checkout. Same lockfile and
+      # target directory as the plugin, so it reuses the build above.
+      - run: cp Cargo.lock examples/custom-router/
+      - run: cargo build --release --manifest-path examples/custom-router/Cargo.toml
+        env:
+          CARGO_TARGET_DIR: target
+      - run: ./target/release/router config validate examples/custom-router/router.yaml
       # The plugin in the Router pipeline (TestHarness), against the Node subgraphs.
       - run: npm run test:router-harness
         working-directory: testbed

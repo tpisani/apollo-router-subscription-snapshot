@@ -1,0 +1,28 @@
+# Minimal configuration for the plugin. The Router needs APOLLO_KEY and
+# APOLLO_GRAPH_REF for federated subscriptions (included in the GraphOS free plan).
+supergraph:
+  listen: 0.0.0.0:4000
+subscription:
+  enabled: true
+  # Recommended: one upstream per operation, variables and identity, shared by
+  # every client. The snapshot fills the wait of the clients that join it later.
+  deduplication:
+    all:
+      enabled: true
+  mode:
+    passthrough:
+      all:
+        path: /graphql
+        protocol: graphql_ws
+# Propagate the identity to the subgraph, so deduplication also splits by it.
+headers:
+  all:
+    request:
+      operations:
+        - propagate:
+            named: authorization
+plugins:
+  globo.subscription_snapshot:
+    enabled: true
+    # Every request header that changes what the subgraph sends.
+    identity_headers: [authorization]

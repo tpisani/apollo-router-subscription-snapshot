@@ -109,6 +109,44 @@ export function createCatalogSchema() {
   } }]);
 }
 
+// Modo callback do Apollo Router (protocolo callback/1.0): a requisição da subscription
+// chega por HTTP com extensions.subscription { callbackUrl, subscriptionId, verifier,
+// heartbeatIntervalMs }. O subgraph confirma com "check", responde { data: null } e
+// passa a enviar cada evento como "next" para o callbackUrl. Um 404 do Router
+// (nenhum cliente mais nessa subscription) encerra o stream.
+async function callbackSubscription({ schema, document, body, res }) {
+  const { callbackUrl, subscriptionId: id, verifier, heartbeatIntervalMs } = body.extensions.subscription;
+  const send = message => fetch(callbackUrl, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'subscription', id, verifier, ...message }) });
+  const check = await send({ action: 'check' }).catch(error => ({ ok: false, status: error.message }));
+  if (check.status !== 204) {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ errors: [{ message: `callback check falhou: ${check.status}` }] }));
+    return;
+  }
+  const iterator = await subscribe({ schema, document, variableValues: body.variables, operationName: body.operationName });
+  if (!iterator[Symbol.asyncIterator]) {                      // erro antes de abrir (ex.: BAD_USER_INPUT)
+    res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(iterator)); return;
+  }
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ data: null }));
+  let open = true;
+  let closed = false;
+  const stop = () => { open = false; if (!closed) { closed = true; iterator.return?.(); } };
+  const heartbeat = heartbeatIntervalMs > 0 && setInterval(() => {
+    send({ action: 'heartbeat', ids: [id] }).then(r => { if (r.status === 404) stop(); }, () => {});
+  }, heartbeatIntervalMs);
+  try {
+    for await (const result of iterator) {
+      const response = await send({ action: 'next', payload: result }).catch(() => null);
+      if (!response || response.status === 404) { open = false; break; }   // Router sem essa subscription: encerra
+    }
+    if (open) await send({ action: 'complete' }).catch(() => {});
+  } finally {
+    clearInterval(heartbeat); stop();
+  }
+}
+
 // Cache-Control por resposta = menor TTL entre os campos resolvidos. Sem dica,
 // com erro ou em mutation: no-store.
 function graphqlHandler(schema, extra = () => false) {
@@ -126,6 +164,7 @@ function graphqlHandler(schema, extra = () => false) {
       const body = JSON.parse(raw);
       const document = parse(body.query);
       const errors = validate(schema, document);
+      if (!errors.length && body.extensions?.subscription?.callbackUrl) { await callbackSubscription({ schema, document, body, res }); return; }
       const contextValue = { cacheHints: [] };
       const result = errors.length ? { errors }
         : await execute({ schema, document, contextValue, variableValues: body.variables, operationName: body.operationName });

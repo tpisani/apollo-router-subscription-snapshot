@@ -13,7 +13,8 @@ import { verifyRouterScale } from './verify-router-scale.mjs';
 // balanceador e 1 sem retenção, contra os subgraphs Node. Os processos herdam o
 // ambiente (proxy, CA), o que os containers do compose não fazem numa sessão na nuvem.
 // Exige APOLLO_KEY e APOLLO_GRAPH_REF no ambiente; nunca os imprime.
-//   npm run test:router-real
+//   npm run test:router-real                  (subgraphs por WebSocket, passthrough)
+//   MODE=callback npm run test:router-real    (subgraphs por HTTP callback)
 const root = new URL('..', import.meta.url).pathname;
 const bin = join(root, 'router-plugin/target/release/router');
 if (!process.env.APOLLO_KEY || !process.env.APOLLO_GRAPH_REF) {
@@ -25,6 +26,9 @@ if (!existsSync(bin)) {
   if (spawnSync('cargo', ['build', '--release'], { cwd: join(root, 'router-plugin'), stdio: 'inherit' }).status !== 0) process.exit(1);
 }
 
+const mode = process.env.MODE ?? 'passthrough';
+if (!['passthrough', 'callback'].includes(mode)) throw new Error(`MODE inválido: ${mode}`);
+const config = join(root, mode === 'callback' ? 'router/router-plugin-callback.yaml' : 'router/router-plugin.yaml');
 const dir = mkdtempSync(join(tmpdir(), 'router-real-'));
 const periodicMs = Number(process.env.PERIODIC_MS ?? 3000);
 const subgraphs = await startSubgraphs({
@@ -40,8 +44,8 @@ const instances = [
   { name: 'router-c', port: 4103, retain: true }, { name: 'router-plain', port: 4104, retain: false }
 ].map(i => ({ ...i, url: `http://127.0.0.1:${i.port}/graphql`, health: `http://127.0.0.1:${i.port + 4000}/health?ready`, logs: '' }));
 for (const i of instances) {
-  i.proc = spawn(bin, ['--config', join(root, 'router/router-plugin.yaml'), '--supergraph', supergraph], {
-    env: { ...process.env, ROUTER_LISTEN: `127.0.0.1:${i.port}`, ROUTER_HEALTH_LISTEN: `127.0.0.1:${i.port + 4000}`, RETAIN_ENABLED: String(i.retain), RUST_BACKTRACE: '0' },
+  i.proc = spawn(bin, ['--config', config, '--supergraph', supergraph], {
+    env: { ...process.env, ROUTER_LISTEN: `127.0.0.1:${i.port}`, ROUTER_CALLBACK_URL: `http://127.0.0.1:${i.port}/callback`, ROUTER_HEALTH_LISTEN: `127.0.0.1:${i.port + 4000}`, RETAIN_ENABLED: String(i.retain), RUST_BACKTRACE: '0' },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   for (const s of [i.proc.stdout, i.proc.stderr]) s.on('data', b => { i.logs = (i.logs + b).slice(-20_000); });
@@ -49,8 +53,10 @@ for (const i of instances) {
 let lb;
 const stop = async () => {
   await lb?.close();
-  for (const i of instances) if (i.proc.exitCode === null) i.proc.kill('SIGTERM');
-  await Promise.all(instances.map(i => i.proc.exitCode === null ? new Promise(r => i.proc.once('exit', r)) : null));
+  // Um processo morto por sinal fica com exitCode null e signalCode preenchido.
+  const running = i => i.proc.exitCode === null && i.proc.signalCode === null;
+  for (const i of instances) if (running(i)) i.proc.kill('SIGTERM');
+  await Promise.all(instances.map(i => running(i) ? new Promise(r => i.proc.once('exit', r)) : null));
   await subgraphs.close();
   rmSync(dir, { recursive: true, force: true });
 };
@@ -62,11 +68,11 @@ try {
   for (const i of instances) {
     const end = Date.now() + 60_000;
     while (!(await fetch(i.health).then(r => r.ok, () => false))) {
-      if (i.proc.exitCode !== null || Date.now() > end) throw new Error(`${i.name} não ficou pronto:\n${errors(i.logs).join('\n') || i.logs.slice(-2000)}`);
+      if (i.proc.exitCode !== null || i.proc.signalCode !== null || Date.now() > end) throw new Error(`${i.name} não ficou pronto:\n${errors(i.logs).join('\n') || i.logs.slice(-2000)}`);
       await delay(250);
     }
   }
-  console.log(`4 routers prontos (${instances.map(i => `${i.name}:${i.port}`).join(', ')}), frame periódico de ${periodicMs} ms`);
+  console.log(`modo ${mode}: 4 routers prontos (${instances.map(i => `${i.name}:${i.port}`).join(', ')}), frame periódico de ${periodicMs} ms`);
   lb = await startBalancer({ targets: instances.slice(0, 3).map(i => i.url), port: 4200 });
   const killed = instances[1];
   const result = await verifyRouterScale({
@@ -76,8 +82,8 @@ try {
     kill: process.env.KILL === '0' ? undefined : async () => { lb.remove(killed.url); killed.proc.kill('SIGKILL'); },
     log: console.log
   });
-  console.log(JSON.stringify({ router: '2.10.5 + poc.retain_last_frame', instancias: 3, periodicoMs: periodicMs, ...result }, null, 2));
-  console.log('OK: Apollo Router de verdade com o plugin, em várias instâncias');
+  console.log(JSON.stringify({ router: '2.10.5 + poc.retain_last_frame', modo: mode, instancias: 3, periodicoMs: periodicMs, ...result }, null, 2));
+  console.log(`OK: Apollo Router de verdade com o plugin, em várias instâncias (modo ${mode})`);
   code = 0;
 } catch (error) {
   console.error(`FALHOU: ${error.stack ?? error}`);

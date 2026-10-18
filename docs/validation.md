@@ -3,7 +3,7 @@
 Ambiente: Linux, Node.js 22.22.0, Hive Gateway 2.15.2, Apollo Router 2.10.0
 (validação de config), apollo-router 2.10.5 com o plugin (Rust 1.97), Docker 29.8.
 
-## Testes (`npm test`: 36 aprovados)
+## Testes (`npm test`: 37 aprovados)
 
 - **`tests/domain.test.mjs` (8):**
   - patches e a propriedade de sobreposição (usados no modo `delta` dos
@@ -60,18 +60,34 @@ Ambiente: Linux, Node.js 22.22.0, Hive Gateway 2.15.2, Apollo Router 2.10.0
 ## Apollo Router de verdade com GraphOS (`npm run test:router-real`)
 
 O binário de `router-plugin/` (2.10.5 + plugin) com uma chave do GraphOS (plano
-gratuito, graph só de teste), 3 instâncias com retenção atrás do balanceador e 1
-sem, contra os subgraphs Node; frame periódico de 3 s. Só as subscriptions
-passaram pelos routers; nenhuma bateu no limite do plano gratuito.
+gratuito, graph só de teste): 3 instâncias com retenção atrás do balanceador e 1
+sem, contra os subgraphs Node, frame periódico de 3 s. Clientes em HTTP multipart
+(o único transporte de subscription do Router para clientes). Só as subscriptions
+passaram pelos routers; nenhuma bateu no limite do plano gratuito. Rodou nos dois
+modos de subscription entre Router e subgraphs:
 
-| Verificação | Resultado |
-| --- | --- |
-| Deduplicação por instância | 24 clientes em 2 partidas: **3 streams por canal e partida** no subgraph (um por instância) |
-| Late joiner com o plugin | **4–10 ms**, com o frame retido nas 3 rodadas |
-| Late joiner sem o plugin | **2.832–2.841 ms**, esperando o periódico, sem frame retido |
-| Identidade | tokens diferentes: 2 streams; só o cliente com o mesmo token recebeu o frame retido |
-| Instância derrubada (SIGKILL) no meio do jogo | 12 clientes, 8 reconectaram pelo balanceador; todos sincronizados de novo em **142 ms**; nenhuma versão regrediu; estado final igual ao banco |
-| Limpeza | sem assinantes, nenhum stream no subgraph |
+| Verificação | passthrough (WebSocket) | callback (HTTP, `MODE=callback`) |
+| --- | --- | --- |
+| Deduplicação: 24 clientes, 2 partidas | 3 streams por canal e partida (um por instância)¹ | 3 streams por canal e partida |
+| Late joiner com o plugin | **4–7 ms**, frame retido nas 3 rodadas | **4–10 ms**, frame retido nas 3 rodadas |
+| Late joiner sem o plugin | **2.834–2.839 ms** (periódico) | **2.837–2.847 ms** (periódico) |
+| Identidade | 2 streams para 2 tokens; só o mesmo token recebe o frame retido | igual |
+| Instância derrubada (SIGKILL) com 12 clientes | 8 reconectaram; todos de volta em **142 ms**; sem regressão; estado igual ao banco | 8 reconectaram; **143 ms**; igual |
+| Limpeza | sem streams no subgraph | sem streams no subgraph (o subgraph para no 404 do Router) |
+
+¹ **Deduplicação do Router sob concorrência (passthrough):** numa das execuções
+uma instância abriu 2 upstreams para a mesma partida (4 em vez de 3). A sonda
+`scripts/probe-dedup.mjs` (8 clientes simultâneos numa instância) reproduziu em
+1 de 6 rodadas, e em 2 de 12 **com o plugin desligado**, ou seja, vem do Router;
+o upstream extra continua aberto. No modo callback, 0 de 6. Não afeta a correção
+(os dois upstreams entregam os mesmos frames e o cliente fica com a maior
+versão), só a eficiência. O roteiro registra `upstreamsExtras` e só reprova se
+não houver deduplicação.
+
+- **`tests/callback.test.mjs` (1):** o protocolo callback/1.0 do lado do
+  subgraph, contra um `/callback` falso: `check` antes de responder
+  `{ data: null }`, frames como `next`, e um 404 do Router fecha o stream sem
+  `complete`. Esse teste achou um `complete` indevido depois do 404, corrigido.
 
 ## Plugin do Router (`router-plugin/`, `poc.retain_last_frame`)
 
@@ -143,6 +159,8 @@ de estatísticas no mesmo benchmark. O estado inteiro custa ~1,8× em banda aqui
 ## Não verificado
 
 - **Response cache com Redis** (`--profile apollo`) com o Router licenciado.
+- **A causa exata do upstream duplicado** na deduplicação passthrough do Router
+  (ver acima); seria um caso para reportar à Apollo.
 - **O perfil `apollo-plugin` do compose com a chave:** os containers não alcançam
   o GraphOS nesta sessão; o mesmo cenário rodou com os binários no host.
 - **Balanceador real** (ALB, NGINX, Envoy): o do teste é um round-robin simples

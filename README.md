@@ -98,6 +98,7 @@ npm run test:router      # o mesmo cenário dos testes, contra o Router
 ```bash
 npm run test:router-harness   # sem licença: o plugin no pipeline do Router (TestHarness)
 npm run test:router-real      # com APOLLO_KEY/APOLLO_GRAPH_REF: 3 routers + balanceador no host
+MODE=callback npm run test:router-real   # o mesmo com os subgraphs no modo callback
 # ou, numa máquina local, pelo compose:
 docker compose --profile apollo-plugin up --build -d && npm run test:router-scale
 ```
@@ -107,7 +108,7 @@ Detalhes em [`router-plugin/README.md`](router-plugin/README.md).
 ## Testes, experimentos e benchmark
 
 ```bash
-npm test                 # 36 testes: domínio, canais, cliente, experimentos, ponta a ponta e várias instâncias
+npm test                 # 37 testes: domínio, canais, cliente, experimentos, ponta a ponta e várias instâncias
 (cd router-plugin && cargo test --release)   # 7 testes de unidade do plugin
 npm run bench            # partida simulada pelo edge: 100 clientes só de placar + 50 completos
 EDGES=3 npm run bench    # o mesmo com 3 instâncias atrás de um balanceador
@@ -124,5 +125,5 @@ SCORE_ONLY=0 FULL=200 STORM_RATE=400 npm run bench
 - Placar e estatísticas não são consistentes entre si numa transação: as
   estatísticas podem estar até ~0,5 s atrás do placar (ver
   [design](docs/design.md#consistência-entre-canais)).
-- O plugin rodou com o Router de verdade e GraphOS, em 3 instâncias; o response
-  cache com Redis ainda não. Ver [validação](docs/validation.md).
+- O plugin rodou com o Router de verdade e GraphOS, em 3 instâncias, nos modos
+  passthrough e callback; o response cache com Redis ainda não. Ver [validação](docs/validation.md).

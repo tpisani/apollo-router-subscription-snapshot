@@ -66,7 +66,8 @@ verificação violaria a licença (ELv2), então o teste real precisa da chave.
 3. Rode o teste de verdade, com o binário no host:
 
 ```bash
-npm run test:router-real          # compila se preciso, sobe tudo, roda o roteiro e derruba
+npm run test:router-real                 # subgraphs por WebSocket (passthrough)
+MODE=callback npm run test:router-real   # subgraphs por HTTP callback
 ```
 
    Sobe os subgraphs Node, 3 routers com o plugin (4101–4103), 1 sem retenção
@@ -84,6 +85,17 @@ npm run test:router-scale
 # com uma instância derrubada no meio do jogo:
 KILL_CMD="docker compose --profile apollo-plugin stop router-b" npm run test:router-scale
 ```
+
+**Modo callback:** `router/router-plugin-callback.yaml` troca o passthrough pelo
+callback do Router (`/callback` na mesma porta); os subgraphs Node implementam o
+protocolo callback/1.0 (`src/app.mjs`). O plugin age no stream que vai ao cliente,
+então se comporta igual nos dois modos.
+
+**Deduplicação sob concorrência:** `scripts/probe-dedup.mjs` mede quantos
+upstreams uma instância abre quando vários clientes entram ao mesmo tempo
+(`MODE`, `CLIENTS`, `TRIALS`, `RETAIN_ENABLED=false`). No passthrough, o Router às
+vezes abre um a mais, inclusive com o plugin desligado (ver
+[validação](../docs/validation.md)).
 
 **Limite do plano gratuito:** o Router limita as requisições por instância
 (503 `ROUTER_FREE_PLAN_RATE_LIMIT_REACHED`); cada subscription conta uma vez,

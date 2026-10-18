@@ -1,4 +1,4 @@
-# Router customizado: apollo-router 2.18.0 + subscription_snapshot.
+# Custom Router: apollo-router 2.18.0 + subscription_snapshot.
 #   docker build -t apollo-router-subscription-snapshot .
 FROM rust:1.97.1-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake && rm -rf /var/lib/apt/lists/*

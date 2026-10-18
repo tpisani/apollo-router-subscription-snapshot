@@ -32,7 +32,7 @@ headers:
         - propagate:
             named: authorization
 plugins:
-  subscription_snapshot:
+  realtime_sports.subscription_snapshot:
     enabled: ${env.RETAIN_ENABLED:-true}
     # A mesma identidade que a deduplicação usa: tokens diferentes nunca
     # compartilham frame retido.

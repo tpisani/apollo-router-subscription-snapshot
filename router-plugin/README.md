@@ -130,8 +130,15 @@ O mesmo roteiro roda no `npm test` contra o emulador
 Para deixar o efeito da retenção mais visível, aumente o frame periódico:
 `SCOREBOARD_PERIODIC_MS=3000 docker compose --profile apollo-plugin up -d`.
 
-## Suporte
+## Suporte e atualizações
 
-A Apollo não dá suporte a plugins nativos nem a binários customizados. Manter o
-plugin significa recompilar a cada versão do Router e acompanhar mudanças internas,
-como a forma do stream da subscription descrita acima.
+A Apollo não dá suporte a plugins nativos nem a binários customizados. Cada versão
+nova do Router exige recompilar e rodar `npm run test:router-harness`.
+[`docs/router-upgrades.md`](../docs/router-upgrades.md) compara 20 versões
+(1.61 a 2.18) e mostra o que costuma quebrar:
+- **O código do plugin:** raramente. Ele compilou e passou em todos os testes na
+  2.18.0 sem mudanças.
+- **Em volta dele:** com frequência. A versão do Rust, a config YAML do Router (que
+  não serve para duas versões ao mesmo tempo) e dependências como o `schemars`.
+
+O guia também traz o passo a passo de atualização.

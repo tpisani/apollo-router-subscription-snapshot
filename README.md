@@ -1,135 +1,110 @@
-# GraphQL federado em tempo real: placar e estatísticas
+# `subscription_snapshot`: plugin do Apollo Router
 
-POC de dados esportivos ao vivo com GraphQL federado: placar e estatísticas em
-**subgraphs e subscriptions separados**, cada um com a sua política de envio,
-compatível com a deduplicação de subscriptions do Apollo Router e com cache em
-todas as queries. Roda sem licença com o Hive Gateway e um edge que emula a
-deduplicação e o cache do Router.
+Plugin nativo do Apollo Router 2.18.0 que guarda o último evento de cada
+subscription deduplicada. Quem entra num upstream já aberto recebe esse estado na
+hora (1 ms no pipeline do Router), em vez de esperar o próximo frame do subgraph
+(~2,8 s com frame periódico de 3 s).
 
-- **Placar:** cada mudança sai na hora, com o estado inteiro (~150 B). O gol
-  chega em ~10 ms.
-- **Estatísticas:** também com o estado inteiro, com um limitador: na hora quando
-  o jogo está calmo, e no máximo 2 frames/s numa rajada.
-- **Uma regra só no cliente:** fica com o frame de maior versão. Não há lacuna,
-  histórico nem query de recuperação.
-- **Retenção do último frame**, num plugin nativo do Apollo Router
-  ([`router-subscription-snapshot/`](router-subscription-snapshot/)) e no emulador: quem entra num upstream já
-  aberto recebe o estado na hora (1 ms no pipeline do Router, contra ~2,8 s
-  esperando o frame periódico).
-- **Várias instâncias:** cada uma deduplica e retém os seus upstreams; uma
-  instância que cai é absorvida pelas outras em ~150 ms, sem regressão de versão.
-- **Uma lista de jogos assina só o placar** e não recebe nenhum byte de
-  estatísticas.
-
-- **Ciclo de vida:** partida agendada ou encerrada usa só a query; a subscription
-  começa 15 min antes do início e termina no `FULL_TIME`. O cache do status nunca
-  atrasa o início ([página](docs/cenarios/status-e-kickoff.html)).
-
-Cenários passo a passo, interativos: [`docs/cenarios/`](docs/cenarios/).
-Por que dois canais, estado inteiro, retenção e várias instâncias, com os experimentos:
-[`docs/design.md`](docs/design.md). O que foi executado:
-[`docs/validation.md`](docs/validation.md).
-
-## Comece por aqui
-
-- **Políticas de envio por canal (hub, limitador, frame periódico, fila):** [`src/channels.mjs`](src/channels.mjs)
-- **Cliente (`StateSync`, igual nos dois canais):** [`client/sync.mjs`](client/sync.mjs)
-- **Plugin do Router `subscription_snapshot` (Rust):** [`router-subscription-snapshot/src/snapshot.rs`](router-subscription-snapshot/src/snapshot.rs)
-- **Retenção, chave com identidade e cache no emulador:** [`scripts/edge.mjs`](scripts/edge.mjs)
-- **Várias instâncias atrás de um balanceador:** [`scripts/balancer.mjs`](scripts/balancer.mjs), [`tests/scale.test.mjs`](tests/scale.test.mjs)
-- **Domínio (placar, relógio, estatísticas):** [`src/sports.mjs`](src/sports.mjs)
-- **Schemas dos subgraphs `scores`, `stats` e `catalog`:** [`src/schemas.mjs`](src/schemas.mjs)
-- **Experimentos de desenho:** [`tests/experiments.test.mjs`](tests/experiments.test.mjs), [`scripts/experiments.mjs`](scripts/experiments.mjs)
-
-## Operações
-
-```graphql
-# Placar: mesmas variáveis para todos → deduplicável
-subscription Scoreboard($matchId: ID!) {
-  scoreboardUpdates(matchId: $matchId) { version committedAt state { status home away clock { running seconds updatedAt } } }
-}
-# Estatísticas: estado inteiro, no máximo 1 frame a cada 500 ms numa rajada
-subscription Stats($matchId: ID!) {
-  statsUpdates(matchId: $matchId) { version committedAt state { home { possession shots } away { possession shots } } }
-}
-# Snapshots cacheáveis: "um estado em alguma versão >= minVersion"
-query { scoreboard(matchId: "m1", minVersion: 0) { version state { home away } } }
-query { matchStats(matchId: "m1", minVersion: 812) { version state { home { possession } } } }
-# Estáticos (cache de 1 h)
-query { match(id: "m1") { home { name } away { name } players { id name number } } }
+```yaml
+plugins:
+  globo.subscription_snapshot:
+    enabled: true
+    identity_headers: [authorization]
 ```
 
-## Requisitos
+## Estrutura do repositório
 
-Node.js 22.13+ (usa `node:sqlite`; o CI usa Node 24). Docker é opcional. O
-Apollo Router exige `APOLLO_KEY`/`APOLLO_GRAPH_REF` com licença para
-subscriptions federadas e response cache.
+| Caminho | O que é |
+| --- | --- |
+| [`src/lib.rs`](src/lib.rs) | o plugin, com os testes de unidade |
+| [`src/main.rs`](src/main.rs) | o binário do Router com o plugin |
+| [`tests/router_pipeline.rs`](tests/router_pipeline.rs) | testes de integração no pipeline do Router (`TestHarness`) |
+| [`examples/router/`](examples/router/) | configs do Router com o plugin (passthrough e callback) |
+| [`docs/router-upgrades.md`](docs/router-upgrades.md) | o plugin e as versões do Apollo Router |
+| [`testbed/`](testbed/) | **auxiliar:** subgraphs, cliente, emulador e roteiros que testam e medem o plugin |
 
-## Executar sem licença (Hive Gateway + edge)
+O `testbed/` é a POC que motivou o plugin (placar e estatísticas ao vivo em
+subgraphs federados) e a bancada para testá-lo; ver o
+[README do testbed](testbed/README.md).
+
+## Como funciona
+
+- **Onde entra:** no `supergraph_service`. O stream de uma subscription começa com
+  um marcador (`subscribed: true`, sem dados) que o router service consome para
+  abrir o multipart e não envia. Por isso o frame retido vai **depois** do
+  marcador, antes dos eventos ao vivo.
+- **Chave:** documento + `operationName` + variáveis + os headers de
+  `identity_headers`. Tokens diferentes nunca compartilham frame retido.
+- **O que guarda:** só eventos com dados e sem erros.
+- **Ciclo de vida:** a entrada existe enquanto houver assinante com a chave. Quando
+  o último stream termina ou é descartado, o snapshot some junto com o upstream.
+- **Marcação:** o snapshot sai com `extensions.snapshot: true`. O cliente
+  não precisa dela (ele fica com a maior versão); os testes a usam para medir.
+- **Correção:** depende de todo frame trazer o estado inteiro e uma versão. Um frame
+  retido mais velho que um em trânsito é ignorado pelo cliente (ver o
+  [desenho](testbed/docs/design.md)).
+
+Como recomenda a Apollo, o plugin é registrado com um nome de grupo
+(`register_plugin!("globo", "subscription_snapshot", …)`), então a chave
+em `plugins:` é `globo.subscription_snapshot`. O grupo evita colisão com
+plugins da Apollo e com outros plugins customizados no mesmo binário.
+
+## Compilar e testar (sem licença)
+
+Precisa de Rust 1.97.1 (o mínimo do apollo-router 2.18.0, fixado em
+`rust-toolchain.toml`; o rustup instala sozinho) e `protoc`
+(`apt-get install protobuf-compiler libprotobuf-dev`). A primeira compilação do
+Router leva ~20 min.
 
 ```bash
-npm ci
-npm run compose-schema   # gera gateway/supergraph.graphql
-SIMULATE=m1 npm start    # subgraphs scores :4001, catalog :4002, stats :4003, simulando a partida m1
-npm run gateway          # Hive Gateway :4000
-npm run edge             # dedup + retenção + cache de queries (pior caso) :4010, multipart como o Router
+cargo fmt --all --check
+cargo clippy --release --all-targets --no-deps -- -D warnings
+cargo test --release          # testes de unidade (os de integração ficam ignorados)
+cargo build --release         # target/release/router
+./target/release/router config validate examples/router/router-plugin.yaml
+docker build -t router-subscription-snapshot .
 ```
 
-Em outro terminal:
+Os testes de integração precisam dos subgraphs do testbed:
 
 ```bash
-npm run client                         # tela da partida: placar + estatísticas
-CHANNELS=scoreboard npm run client     # lista de jogos: só placar
+cd testbed && npm ci && npm run test:router-harness
 ```
 
-Sem `SIMULATE`, use `npm run demo` para gerar lances e gols pelas mutations.
-Métricas: `curl localhost:4001/metrics` (streams, frames, snapshots) e
-`curl localhost:4010/metrics` (upstreams por operação, cache).
+Sobe os subgraphs Node (frame periódico de 3 s) e roda `tests/router_pipeline.rs`
+com o `TestHarness` do crate: router service, deduplicação, passthrough
+`graphql_ws` e multipart de verdade, com o plugin carregado pela config. O
+`TestHarness` usa uma licença irrestrita só em testes; ele não serve tráfego nem
+substitui rodar o binário com GraphOS
+([testes com o Router de verdade](testbed/README.md#apollo-router-de-verdade-com-o-plugin)).
 
-Com Docker: `docker compose up --build -d` sobe tudo, com a partida m1 simulada.
+## Convenções
 
-## Executar com o Apollo Router
+O crate segue os [exemplos de plugins nativos](https://github.com/apollographql/router/tree/dev/examples)
+e as regras de lint do repositório do Apollo Router:
 
-```bash
-cp .env.example .env     # preencha APOLLO_KEY e APOLLO_GRAPH_REF
-docker compose --profile apollo up --build -d   # Router em :4100
-GRAPHQL_URL=http://localhost:4100/graphql npm run client
-npm run test:router      # o mesmo cenário dos testes, contra o Router
-```
+- Uma lib com o plugin e um binário que só a linka (`use router_subscription_snapshot as _;`
+  basta para o `register_plugin!` valer), com os testes de integração em `tests/`.
+- `Plugin` com `type Config` (`Deserialize` + `JsonSchema`, `deny_unknown_fields`;
+  os doc comments viram a descrição no JSON schema da config) e hook montado com
+  `ServiceBuilder` e as layers do `apollo_router::layers`.
+- Edition 2024 e o mesmo `rustfmt.toml` (`style_edition = "2024"`), com um import
+  por linha, agrupados em std, crates externos e o próprio crate.
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` e `cargo doc`
+  com `RUSTDOCFLAGS=-D warnings`, como o `xtask lint` da Apollo; o CI roda os três.
+- Testes do hook com `tower_test::mock::pair` (o substituto que a Apollo indica para
+  os `Mock*Service`, obsoletos) e do registro com o `TestHarness`.
+- Código, comentários e mensagens em inglês.
 
-### Router customizado com o plugin de retenção
+## Suporte e atualizações
 
-```bash
-npm run test:router-harness   # sem licença: o plugin no pipeline do Router (TestHarness)
-npm run test:router-real      # com APOLLO_KEY/APOLLO_GRAPH_REF: 3 routers + balanceador no host
-MODE=callback npm run test:router-real   # o mesmo com os subgraphs no modo callback
-# ou, numa máquina local, pelo compose:
-docker compose --profile apollo-plugin up --build -d && npm run test:router-scale
-```
+A Apollo não dá suporte a plugins nativos nem a binários customizados. Cada versão
+nova do Router exige recompilar e rodar `npm run test:router-harness`.
+[`docs/router-upgrades.md`](docs/router-upgrades.md) compara 20 versões
+(1.61 a 2.18) e mostra o que costuma quebrar:
+- **O código do plugin:** raramente. Ele compilou e passou em todos os testes na
+  2.18.0 sem mudanças.
+- **Em volta dele:** com frequência. A versão do Rust, a config YAML do Router (que
+  não serve para duas versões ao mesmo tempo) e dependências como o `schemars`.
 
-Detalhes em [`router-subscription-snapshot/README.md`](router-subscription-snapshot/README.md). O que costuma
-quebrar ao atualizar o Router (20 versões comparadas, plugin testado na 2.18):
-[`docs/router-upgrades.md`](docs/router-upgrades.md).
-
-## Testes, experimentos e benchmark
-
-```bash
-npm test                 # 44 testes: domínio, canais, cliente, experimentos, ponta a ponta e várias instâncias
-(cd router-subscription-snapshot && cargo test --release)   # 8 testes de unidade do plugin
-npm run bench            # partida simulada pelo edge: 100 clientes só de placar + 50 completos
-EDGES=3 npm run bench    # o mesmo com 3 instâncias atrás de um balanceador
-SCORE_ONLY=0 FULL=200 STORM_RATE=400 npm run bench
-```
-
-## Limites deliberados
-
-- Sem autenticação: `matchId` é só um seletor.
-- Hubs em memória: um processo por subgraph. Com réplicas, alimente o hub por um
-  bus depois do commit.
-- A retenção no Apollo Router exige um build customizado com plugin nativo, sem
-  suporte da Apollo.
-- Placar e estatísticas não são consistentes entre si numa transação: as
-  estatísticas podem estar até ~0,5 s atrás do placar (ver
-  [design](docs/design.md#consistência-entre-canais)).
-- O plugin rodou com o Router de verdade e GraphOS, em 3 instâncias, nos modos
-  passthrough e callback; o response cache com Redis ainda não. Ver [validação](docs/validation.md).
+O guia também traz o passo a passo de atualização.

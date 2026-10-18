@@ -3,12 +3,16 @@ on: [push, pull_request]
 jobs:
   feed-and-gateway:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: testbed
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: testbed/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm run compose-schema
       - run: npm test

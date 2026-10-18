@@ -1,9 +1,15 @@
-FROM node:24-bookworm-slim
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+# Router customizado: apollo-router 2.18.0 + subscription_snapshot.
+#   docker build -t router-subscription-snapshot .
+FROM rust:1.97.1-bookworm AS build
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-COPY scripts ./scripts
-COPY gateway/gateway.config.mjs ./gateway/
-EXPOSE 4000 4001 4002 4003 4010
-CMD ["node", "src/server.mjs"]
+RUN cargo build --release --locked && cp target/release/router /router
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /router /dist/router
+WORKDIR /dist
+EXPOSE 4100 8088
+ENTRYPOINT ["/dist/router"]

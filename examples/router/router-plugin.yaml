@@ -1,0 +1,45 @@
+# Router customizado (crate da raiz do repositório) com o plugin globo.subscription_snapshot.
+# Exige APOLLO_KEY/APOLLO_GRAPH_REF com subscriptions federadas (inclusas no plano
+# gratuito do GraphOS). Sem response cache, para depender só de subscriptions.
+#   RETAIN_ENABLED=false desliga a retenção (instância de comparação).
+#   ROUTER_LISTEN / ROUTER_HEALTH_LISTEN: várias instâncias no mesmo host
+#   (scripts/router-real.mjs).
+supergraph:
+  listen: ${env.ROUTER_LISTEN:-0.0.0.0:4100}
+  path: /graphql
+subscription:
+  enabled: true
+  deduplication:
+    # Desde a 2.15, por subgraph ou para todos (all).
+    all:
+      enabled: true
+  mode:
+    passthrough:
+      subgraphs:
+        scores:
+          path: /graphql
+          protocol: graphql_ws
+          heartbeat_interval: 5s
+        stats:
+          path: /graphql
+          protocol: graphql_ws
+          heartbeat_interval: 5s
+# A identidade chega ao subgraph, então a deduplicação também separa por token.
+headers:
+  all:
+    request:
+      # Desde a 2.18, as regras ficam em operations.
+      operations:
+        - propagate:
+            named: authorization
+plugins:
+  globo.subscription_snapshot:
+    enabled: ${env.RETAIN_ENABLED:-true}
+    # A mesma identidade que a deduplicação usa: tokens diferentes nunca
+    # compartilham frame retido.
+    identity_headers: [authorization]
+include_subgraph_errors:
+  all: true
+health_check:
+  listen: ${env.ROUTER_HEALTH_LISTEN:-0.0.0.0:8088}
+  enabled: true

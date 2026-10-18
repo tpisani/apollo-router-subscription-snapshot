@@ -22,14 +22,14 @@ O comportamento é o mesmo do emulador (`scripts/edge.mjs`), agora dentro do Rou
 
 ```yaml
 plugins:
-  realtime_sports.subscription_snapshot:
+  globo.subscription_snapshot:
     enabled: true
     identity_headers: [authorization]
 ```
 
 Como recomenda a Apollo, o plugin é registrado com um nome de grupo
-(`register_plugin!("realtime_sports", "subscription_snapshot", …)`), então a chave
-em `plugins:` é `realtime_sports.subscription_snapshot`. O grupo evita colisão com
+(`register_plugin!("globo", "subscription_snapshot", …)`), então a chave
+em `plugins:` é `globo.subscription_snapshot`. O grupo evita colisão com
 plugins da Apollo e com outros plugins customizados no mesmo binário.
 
 ## Convenções

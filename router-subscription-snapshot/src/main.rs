@@ -1,4 +1,4 @@
-//! Apollo Router binary with the `realtime_sports.subscription_snapshot` plugin.
+//! Apollo Router binary with the `globo.subscription_snapshot` plugin.
 
 #[cfg(test)]
 mod harness;

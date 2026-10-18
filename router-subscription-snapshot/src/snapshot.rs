@@ -273,12 +273,8 @@ impl Plugin for SubscriptionSnapshot {
 }
 
 // The group name namespaces the plugin, so its key in the `plugins:` section of the
-// Router configuration is `realtime_sports.subscription_snapshot`.
-register_plugin!(
-    "realtime_sports",
-    "subscription_snapshot",
-    SubscriptionSnapshot
-);
+// Router configuration is `globo.subscription_snapshot`.
+register_plugin!("globo", "subscription_snapshot", SubscriptionSnapshot);
 
 #[cfg(test)]
 mod tests {
@@ -572,7 +568,7 @@ mod tests {
     async fn the_plugin_is_registered() {
         let config = serde_json::json!({
             "plugins": {
-                "realtime_sports.subscription_snapshot": {
+                "globo.subscription_snapshot": {
                     "enabled": true,
                     "identity_headers": ["authorization"]
                 }

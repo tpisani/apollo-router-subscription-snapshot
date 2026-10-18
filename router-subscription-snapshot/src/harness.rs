@@ -42,7 +42,7 @@ async fn harness(snapshot: bool) -> router::BoxCloneService {
             "subscription": { "enabled": true, "deduplication": { "enabled": true }, "mode": { "passthrough": { "subgraphs": passthrough } } },
             "headers": { "all": { "request": [{ "propagate": { "named": "authorization" } }] } },
             "include_subgraph_errors": { "all": true },
-            "plugins": { "realtime_sports.subscription_snapshot": { "enabled": snapshot, "identity_headers": ["authorization"] } }
+            "plugins": { "globo.subscription_snapshot": { "enabled": snapshot, "identity_headers": ["authorization"] } }
         }))
         .unwrap()
         .build_router()

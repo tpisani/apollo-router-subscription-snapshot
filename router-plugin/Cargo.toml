@@ -1,0 +1,31 @@
+[package]
+name = "poc-router"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Apollo Router com o plugin poc.retain_last_frame (retenção do último frame de subscriptions deduplicadas)"
+
+[[bin]]
+name = "router"
+path = "src/main.rs"
+
+[dependencies]
+apollo-router = "=2.10.5"
+anyhow = "1"
+async-trait = "0.1"
+futures = "0.3"
+http = "1"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["full"] }
+tracing = "0.1"
+
+[dev-dependencies]
+bytes = "1"
+http-body-util = "0.1"
+serde_json_bytes = "0.2"
+
+[profile.release]
+debug = false

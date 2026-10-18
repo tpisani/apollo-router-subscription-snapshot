@@ -1,259 +1,133 @@
-# GraphQL federado: snapshot cacheado + histórico + stream compartilhado
+# GraphQL federado em tempo real: placar e estatísticas
 
-Exemplo de sincronização de pedidos com Apollo Router, dois subgraphs, Redis e
-SQLite persistente. O snapshot pode estar antigo nos caches do Router e do
-subgraph. O cliente recupera a diferença pelo histórico e continua por uma
-subscription sem cursor individual, compatível com deduplicação.
+POC de dados esportivos ao vivo com GraphQL federado: placar e estatísticas em
+**subgraphs e subscriptions separados**, cada um com a sua política de envio,
+compatível com a deduplicação de subscriptions do Apollo Router e com cache em
+todas as queries. Roda sem licença com o Hive Gateway e um edge que emula a
+deduplicação e o cache do Router.
+
+- **Placar:** cada mudança sai na hora, com o estado inteiro (~150 B). O gol
+  chega em ~10 ms.
+- **Estatísticas:** também com o estado inteiro, com um limitador: na hora quando
+  o jogo está calmo, e no máximo 2 frames/s numa rajada.
+- **Uma regra só no cliente:** fica com o frame de maior versão. Não há lacuna,
+  histórico nem query de recuperação.
+- **Retenção do último frame**, num plugin nativo do Apollo Router
+  ([`router-plugin/`](router-plugin/)) e no emulador: quem entra num upstream já
+  aberto recebe o estado na hora (1 ms no pipeline do Router, contra ~2,8 s
+  esperando o frame periódico).
+- **Várias instâncias:** cada uma deduplica e retém os seus upstreams; uma
+  instância que cai é absorvida pelas outras em ~150 ms, sem regressão de versão.
+- **Uma lista de jogos assina só o placar** e não recebe nenhum byte de
+  estatísticas.
+
+- **Ciclo de vida:** partida agendada ou encerrada usa só a query; a subscription
+  começa 15 min antes do início e termina no `FULL_TIME`. O cache do status nunca
+  atrasa o início ([página](docs/cenarios/status-e-kickoff.html)).
+
+Cenários passo a passo, interativos: [`docs/cenarios/`](docs/cenarios/).
+Por que dois canais, estado inteiro, retenção e várias instâncias, com os experimentos:
+[`docs/design.md`](docs/design.md). O que foi executado:
+[`docs/validation.md`](docs/validation.md).
 
 ## Comece por aqui
 
-- **Algoritmo:** [`client/sync.mjs`](client/sync.mjs).
-- **Persistência e snapshot consistente:** [`src/store.mjs`](src/store.mjs).
-- **Resolvers, cache interno e checkpoints:** [`src/server.mjs`](src/server.mjs).
-- **Apollo Router:** [`router/router.yaml`](router/router.yaml).
-- **Decisões e limites:** [`docs/design.md`](docs/design.md).
-- **Validação realizada:** [`docs/validation.md`](docs/validation.md).
+- **Políticas de envio por canal (hub, limitador, frame periódico, fila):** [`src/channels.mjs`](src/channels.mjs)
+- **Cliente (`StateSync`, igual nos dois canais):** [`client/sync.mjs`](client/sync.mjs)
+- **Plugin do Router `poc.retain_last_frame` (Rust):** [`router-plugin/src/retain.rs`](router-plugin/src/retain.rs)
+- **Retenção, chave com identidade e cache no emulador:** [`scripts/edge.mjs`](scripts/edge.mjs)
+- **Várias instâncias atrás de um balanceador:** [`scripts/balancer.mjs`](scripts/balancer.mjs), [`tests/scale.test.mjs`](tests/scale.test.mjs)
+- **Domínio (placar, relógio, estatísticas):** [`src/sports.mjs`](src/sports.mjs)
+- **Schemas dos subgraphs `scores`, `stats` e `catalog`:** [`src/schemas.mjs`](src/schemas.mjs)
+- **Experimentos de desenho:** [`tests/experiments.test.mjs`](tests/experiments.test.mjs), [`scripts/experiments.mjs`](scripts/experiments.mjs)
+
+## Operações
+
+```graphql
+# Placar: mesmas variáveis para todos → deduplicável
+subscription Scoreboard($matchId: ID!) {
+  scoreboardUpdates(matchId: $matchId) { version committedAt state { status home away clock { running seconds updatedAt } } }
+}
+# Estatísticas: estado inteiro, no máximo 1 frame a cada 500 ms numa rajada
+subscription Stats($matchId: ID!) {
+  statsUpdates(matchId: $matchId) { version committedAt state { home { possession shots } away { possession shots } } }
+}
+# Snapshots cacheáveis: "um estado em alguma versão >= minVersion"
+query { scoreboard(matchId: "m1", minVersion: 0) { version state { home away } } }
+query { matchStats(matchId: "m1", minVersion: 812) { version state { home { possession } } } }
+# Estáticos (cache de 1 h)
+query { match(id: "m1") { home { name } away { name } players { id name number } } }
+```
 
 ## Requisitos
 
-- Node.js 24 ou superior (`node:sqlite` é usado sem módulo nativo externo).
-- Docker e Docker Compose para Router + Redis.
-- `APOLLO_KEY` e `APOLLO_GRAPH_REF` de um graph GraphOS cuja licença habilite
-  federated subscriptions e response caching no Router escolhido.
+Node.js 22.13+ (usa `node:sqlite`; o CI usa Node 24). Docker é opcional. O
+Apollo Router exige `APOLLO_KEY`/`APOLLO_GRAPH_REF` com licença para
+subscriptions federadas e response cache.
 
-O projeto usa como referência o **Router 2.10.0**. O YAML foi validado pelo binário
-oficial dessa versão. Não representa recomendação de versão para produção:
-selecione uma versão homologada e valide o arquivo ao atualizar. O lockfile
-registra as versões exatas dos pacotes Node instalados.
-
-## Executar com Router
+## Executar sem licença (Hive Gateway + edge)
 
 ```bash
 npm ci
-npm run compose-schema
-cp .env.example .env
-# Edite APOLLO_KEY e APOLLO_GRAPH_REF no .env.
-docker compose up --build -d
+npm run compose-schema   # gera gateway/supergraph.graphql
+SIMULATE=m1 npm start    # subgraphs scores :4001, catalog :4002, stats :4003, simulando a partida m1
+npm run gateway          # Hive Gateway :4000
+npm run edge             # dedup + retenção + cache de queries (pior caso) :4010, multipart como o Router
 ```
 
-Endpoints:
-
-| Serviço | Endereço |
-| --- | --- |
-| Apollo Router | http://localhost:4000/graphql |
-| Subgraph orders, HTTP/WS | http://localhost:4001/graphql |
-| Subgraph catalog | http://localhost:4002/graphql |
-| Contadores didáticos | http://localhost:4001/metrics |
-
-Os dois subgraphs compartilham um processo para reduzir a configuração local;
-possuem schemas e endpoints separados. O SQLite fica no volume `orders-data`.
-
-Em um terminal, abra um cliente:
+Em outro terminal:
 
 ```bash
-npm run client
+npm run client                         # tela da partida: placar + estatísticas
+CHANNELS=scoreboard npm run client     # lista de jogos: só placar
 ```
 
-Em outro, execute a demonstração:
+Sem `SIMULATE`, use `npm run demo` para gerar lances e gols pelas mutations.
+Métricas: `curl localhost:4001/metrics` (streams, frames, snapshots) e
+`curl localhost:4010/metrics` (upstreams por operação, cache).
+
+Com Docker: `docker compose up --build -d` sobe tudo, com a partida m1 simulada.
+
+## Executar com o Apollo Router
 
 ```bash
-npm run demo
+cp .env.example .env     # preencha APOLLO_KEY e APOLLO_GRAPH_REF
+docker compose --profile apollo up --build -d   # Router em :4100
+GRAPHQL_URL=http://localhost:4100/graphql npm run client
+npm run test:router      # o mesmo cenário dos testes, contra o Router
 ```
 
-Ela aquece o snapshot, escreve uma mudança e mostra que o snapshot continua
-antigo enquanto `orderHead` já avançou. O cliente converge usando o histórico.
-Abra um segundo `npm run client`: ele entra no stream existente e também
-sincroniza, sem depender de um snapshot emitido na abertura da subscription.
-
-Para verificar cache, late joiner, deduplicação, eventos novos e reconexão de
-forma automática, use uma instância limpa, sem outros clientes conectados:
+### Router customizado com o plugin de retenção
 
 ```bash
-npm run test:router
+npm run test:router-harness   # sem licença: o plugin no pipeline do Router (TestHarness)
+npm run test:router-real      # com APOLLO_KEY/APOLLO_GRAPH_REF: 3 routers + balanceador no host
+MODE=callback npm run test:router-real   # o mesmo com os subgraphs no modo callback
+# ou, numa máquina local, pelo compose:
+docker compose --profile apollo-plugin up --build -d && npm run test:router-scale
 ```
 
-O script também compara `/metrics` para exigir uma única subscription ativa
-no subgraph enquanto dois clientes recebem eventos. A deduplicação aqui é local
-à instância do Router; múltiplas réplicas podem manter conexões distintas.
+Detalhes em [`router-plugin/README.md`](router-plugin/README.md).
 
-Para outro escopo/endpoint:
+## Testes, experimentos e benchmark
 
 ```bash
-SCOPE_ID=loja-99 GRAPHQL_URL=http://localhost:4000/graphql npm run client
+npm test                 # 44 testes: domínio, canais, cliente, experimentos, ponta a ponta e várias instâncias
+(cd router-plugin && cargo test --release)   # 8 testes de unidade do plugin
+npm run bench            # partida simulada pelo edge: 100 clientes só de placar + 50 completos
+EDGES=3 npm run bench    # o mesmo com 3 instâncias atrás de um balanceador
+SCORE_ONLY=0 FULL=200 STORM_RATE=400 npm run bench
 ```
-
-Para parar os serviços preservando o banco:
-
-```bash
-docker compose down
-```
-
-## Executar os testes sem GraphOS ou Docker
-
-```bash
-npm ci
-npm test
-npm run compose-schema
-```
-
-Os testes exercitam transações reais, persistência em disco, replay paginado,
-expiração de histórico, concorrência durante bootstrap, duplicatas, lacunas,
-reconexão e os endpoints HTTP/WS reais dos subgraphs. Usam as portas 4001/4002;
-pare uma instância anterior de `npm start` antes de executá-los.
-
-`npm test` não simula que um Router tenha sido executado. A verificação das
-funcionalidades licenciadas é o comando separado `npm run test:router`.
-
-Você também pode iniciar apenas os subgraphs com `npm start`. Para demonstrar
-o cache interno sem Router:
-
-```bash
-GRAPHQL_URL=http://localhost:4001/graphql npm run demo
-```
-
-## Protocolo de sincronização
-
-1. O cliente abre `orderEvents(scopeId)` e espera um frame real do domínio.
-2. Busca `ordersSnapshot(scopeId)`, que pode vir antigo, com cursor `C`.
-3. Consulta `orderHead(scopeId)` sem cache para obter o limite durável `H`.
-4. Aplica páginas de eventos no intervalo `(C, H]` em ordem.
-5. Consome os frames recebidos durante o bootstrap, ignorando os já aplicados.
-6. Aplica eventos contíguos; diante de lacuna ou checkpoint adiantado, consulta
-   o histórico até a posição observada.
-7. Após desconexão, preserva o último cursor aplicado e repete a recuperação.
-8. Se o cursor expirou, usa `ordersSnapshot(fresh:true)` e sincroniza novamente.
-
-```mermaid
-sequenceDiagram
-  participant C as Cliente
-  participant R as Router
-  participant S as Orders
-  participant D as SQLite
-  C->>R: orderEvents(scopeId)
-  R->>S: Abre ou reutiliza subscription
-  S-->>R: Checkpoint periódico
-  R-->>C: Frame confirma participação
-  C->>R: ordersSnapshot(scopeId)
-  R-->>C: Snapshot cacheado e cursor C
-  C->>R: orderHead(scopeId)
-  R->>S: Leitura sem cache
-  S->>D: Head durável H
-  D-->>C: H via subgraph e Router
-  loop Até alcançar H
-    C->>R: orderChanges(after, through: H)
-    R->>S: Leitura sem cache
-    S->>D: Página do histórico
-    D-->>C: Eventos via subgraph e Router
-  end
-  S-->>R: Mudanças e checkpoints
-  R-->>C: Continua o mesmo fluxo
-```
-
-O stream permanece aberto durante as queries. O iterator de transporte conserva
-os frames ainda não consumidos. Não há tarefas concorrentes escrevendo o estado
-local: bootstrap, replay e aplicação live acontecem sequencialmente.
-
-## Operações para experimentar
-
-Escrever um pedido:
-
-```graphql
-mutation {
-  upsertOrder(scopeId: "loja-42", id: "order-1", status: "PAID") {
-    cursor
-    operation
-    order { id version status }
-  }
-}
-```
-
-Ler o snapshot cacheável ou exigir um snapshot novo:
-
-```graphql
-query {
-  cached: ordersSnapshot(scopeId: "loja-42") {
-    scopeId cursor
-    orders { id version status }
-  }
-  fresh: ordersSnapshot(scopeId: "loja-42", fresh: true) {
-    scopeId cursor
-    orders { id version status }
-  }
-}
-```
-
-A operação acima é enviada como `no-store` por incluir `fresh:true`. Para aquecer
-o cache do Router, execute uma operação contendo apenas o campo cacheável,
-como faz `npm run demo`.
-
-Excluir um pedido:
-
-```graphql
-mutation {
-  deleteOrder(scopeId: "loja-42", id: "order-1") {
-    cursor operation
-    order { id version }
-  }
-}
-```
-
-Consultar uma entidade com campos de dois subgraphs:
-
-```graphql
-query {
-  order(id: "order-1") {
-    id
-    status
-    version
-    label
-  }
-}
-```
-
-`status/version` pertencem a orders; `label` pertence a catalog e possui um cache
-interno ilustrativo de cinco minutos. Essa consulta ilustrativa usa o escopo
-fixo `loja-42`. Ela está separada do contrato de sincronização: `OrderState` é
-um value object e não uma entidade que o Router enriquece com campos de épocas
-diferentes.
 
 ## Limites deliberados
 
-- Exemplo local de estudo, sem autenticação. `scopeId` é um seletor de dados,
-  não uma autorização. Em produção, associe escopo e cursor à identidade e
-  garanta isolamento em todas as chaves de cache e operações.
-- Sem filtros adicionais ou paginação do snapshot. Cada escopo tem uma
-  sequência contígua própria. Não reutilize a regra `cursor + 1` para offsets
-  globais, logs particionados ou streams filtrados.
-- SQLite tem um escritor por vez. Não compartilhe este arquivo via filesystem
-  de rede entre réplicas. Para escalar, adapte a transação para uma fonte
-  compartilhada, como PostgreSQL, e um mecanismo de distribuição apropriado.
-- O log é a fonte durável para o stream; o publisher local faz polling a cada
-  500 ms. Não há confirmação de processamento de cada cliente nem promessa de
-  exactly-once. O replay é idempotente pela sequência aplicada.
-- O histórico não é removido automaticamente. `Store.prune()` existe para
-  exercitar retenção e `CURSOR_EXPIRED` nos testes; defina sua política real.
-- O cliente mantém estado em memória. Para sobreviver ao reinício do cliente,
-  persista **estado e cursor juntos**; persistir apenas o cursor perde a base.
-- O cliente limita uma parte multipart a 4 MB e reconecta após 15 s sem
-  progresso. Produção precisa de limites e observabilidade adequados à carga.
-- `include_subgraph_errors` está ligado para o cliente receber
-  `CURSOR_EXPIRED`. Em produção, exponha somente os erros públicos previstos.
-
-## Referências oficiais
-
-- [Subscriptions e deduplicação](https://www.apollographql.com/docs/graphos/routing/operations/subscriptions/configuration)
-- [Response caching](https://www.apollographql.com/docs/graphos/routing/performance/caching/response-caching/quickstart)
-- [Persistência de eventos e retomada](https://www.apollographql.com/docs/graphos/routing/operations/subscriptions/guaranteed-delivery)
-
-## Git
-
-Clone o repositório:
-
-```bash
-git clone https://github.com/tpisani/poc-graphql-subscriptions.git
-cd poc-graphql-subscriptions
-```
-
-O pacote ZIP entregue anteriormente também contém o código em `source/` e um
-bundle Git do estado inicial. Nenhuma credencial ou arquivo `.env` está
-versionado.
+- Sem autenticação: `matchId` é só um seletor.
+- Hubs em memória: um processo por subgraph. Com réplicas, alimente o hub por um
+  bus depois do commit.
+- A retenção no Apollo Router exige um build customizado com plugin nativo, sem
+  suporte da Apollo.
+- Placar e estatísticas não são consistentes entre si numa transação: as
+  estatísticas podem estar até ~0,5 s atrás do placar (ver
+  [design](docs/design.md#consistência-entre-canais)).
+- O plugin rodou com o Router de verdade e GraphOS, em 3 instâncias, nos modos
+  passthrough e callback; o response cache com Redis ainda não. Ver [validação](docs/validation.md).

@@ -1,7 +1,7 @@
 name: Tests
 on: [push, pull_request]
 jobs:
-  protocol-and-subgraphs:
+  feed-and-gateway:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -10,5 +10,5 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm test
       - run: npm run compose-schema
+      - run: npm test

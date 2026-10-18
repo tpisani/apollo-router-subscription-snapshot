@@ -1,122 +1,118 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { Store, SnapshotCache } from '../src/store.mjs';
-import { Synchronizer, runSession } from '../client/sync.mjs';
-const scope = 'loja-42';
-function setup() {
-  const store = new Store(); const cache = new SnapshotCache(store);
-  const api = {
-    snapshot: async fresh => cache.get(scope,fresh), head: async () => String(store.head(scope)),
-    changes: async (a,h) => store.changes(scope,a,h,2)
-  };
-  return {store,cache,api,sync:new Synchronizer(api,scope)};
-}
-test('snapshot defasado + replay paginado reconstroem o estado exato, incluindo exclusões',async () => {
-  const {store,cache,sync} = setup();
-  try {
-    store.change(scope,'1','PENDING'); const old = cache.get(scope);
-    store.change(scope,'1','PAID'); store.change(scope,'2','PENDING');
-    store.change(scope,'1','SHIPPED'); store.change(scope,'2',null,true);
-    assert.deepEqual(cache.get(scope),old);
-    sync.initialize(old); await sync.catchUp(store.head(scope));
-    assert.deepEqual(sync.view(),{cursor:'5',orders:[{id:'1',version:3,status:'SHIPPED'}]});
-  } finally {store.close();}
-});
-test('overlap, duplicatas, reordenação e checkpoint recuperam perdas sem regressão',async () => {
-  const {store,sync} = setup();
-  try {
-    sync.initialize(store.snapshot(scope));
-    const a=store.change(scope,'1','PENDING'), b=store.change(scope,'1','PAID');
-    await sync.accept({scopeId:scope,kind:'CHANGE',cursor:b.cursor,change:b});
-    await sync.accept({scopeId:scope,kind:'CHANGE',cursor:a.cursor,change:a});
-    store.change(scope,'1','SHIPPED'); // Evento live perdido.
-    await sync.accept({scopeId:scope,kind:'CHECKPOINT',cursor:'3'});
-    assert.equal(sync.orders.get('1').status,'SHIPPED'); assert.equal(sync.cursor,3);
-  } finally {store.close();}
-});
-test('CURSOR_EXPIRED ignora cache antigo e reconstrói por snapshot fresh',async () => {
-  const {store,cache,sync} = setup();
-  try {
-    store.change(scope,'1','PENDING'); sync.initialize(cache.get(scope));
-    store.change(scope,'1','PAID'); store.prune(scope,2); store.change(scope,'1','SHIPPED');
-    assert.equal(cache.get(scope).cursor,'1');
-    await sync.catchUp(3);
-    assert.equal(sync.cursor,3); assert.equal(sync.orders.get('1').status,'SHIPPED');
-  } finally {store.close();}
-});
-test('o limite fixo H não é movido por escritas entre páginas',async () => {
-  const {store,api,sync} = setup();
-  try {
-    sync.initialize(store.snapshot(scope));
-    for(let i=0;i<5;i++) store.change(scope,String(i),'PENDING');
-    const original=api.changes; let calls=0;
-    api.changes=async (a,h)=> {
-      const page=await original(a,h);
-      if(++calls===1) store.change(scope,'late','PAID');
-      return page;
-    };
-    await sync.catchUp(5); assert.equal(sync.cursor,5); assert.equal(sync.orders.has('late'),false);
-    await sync.accept({scopeId:scope,kind:'CHECKPOINT',cursor:'6'});
-    assert.equal(sync.orders.get('late').status,'PAID');
-  } finally {store.close();}
-});
-test('mudanças durante bootstrap e entrada tardia em stream já aberto são recuperadas',async () => {
-  const {store,cache,api,sync} = setup();
-  try {
-    store.change(scope,'1','PENDING'); cache.get(scope);
-    store.change(scope,'1','PAID');
-    const original=api.snapshot;
-    api.snapshot=async fresh=> { const result=await original(fresh); store.change(scope,'1','SHIPPED'); return result; };
-    async function* existingStream() {
-      yield {scopeId:scope,kind:'CHECKPOINT',cursor:'2'};
-      yield {scopeId:scope,kind:'CHECKPOINT',cursor:'3'};
+import { initialScoreboard, initialStats, scoreboardOps, applyStatEvents, playGenerator } from '../src/sports.mjs';
+import { StateSync, createSync, statsFromWire, runSession } from '../client/sync.mjs';
+
+const matchId = 'm1';
+const statsOut = state => ({ ...state, players: Object.entries(state.players).map(([id, p]) => ({ id, ...p })) });
+
+// API sobre o store real com um cache que nunca expira (pior caso).
+function cachedApi(store, shape = s => s) {
+  const snapshots = new SnapshotCache(store, 60_000);
+  const cache = new Map(); const calls = { snapshot: 0 };
+  return {
+    calls,
+    snapshot: async min => {
+      calls.snapshot++;
+      if (!cache.has(min)) { const d = snapshots.get(matchId, min); cache.set(min, { matchId, version: d.version, state: shape(d.state) }); }
+      return structuredClone(cache.get(min));
     }
-    await assert.rejects(runSession(sync,existingStream()),/encerrada/);
-    assert.equal(sync.cursor,3); assert.equal(sync.orders.get('1').status,'SHIPPED');
-  } finally {store.close();}
+  };
+}
+const frameOf = (doc, shape = s => s) => ({ matchId, kind: 'STATE', version: doc.version, state: shape(doc.state), committedAt: null });
+
+test('placar: late joiner fica certo no primeiro frame, sem query além da base', async () => {
+  const store = new Store(':memory:', { initial: initialScoreboard }); const api = cachedApi(store);
+  store.update(matchId, s => scoreboardOps.startPeriod(s, { period: 1 }, 0));
+  await api.snapshot(0); // base antiga no cache (versão 1)
+  const goal = store.update(matchId, s => scoreboardOps.scoreGoal(s, { side: 'HOME' }, 0));
+  const sync = createSync('scoreboard', { matchId, api });
+  sync.initialize(await sync.startBase());
+  assert.deepEqual([sync.version, sync.state.home], [1, 0], 'base provisória antiga');
+  await sync.accept(frameOf(goal));
+  assert.deepEqual([sync.version, sync.state.home, sync.synced], [2, 1, true]);
+  store.close();
 });
-test('retomada mantém estado local e recupera escritas feitas desconectado',async () => {
-  const {store,sync} = setup();
-  try {
-    store.change(scope,'1','PENDING'); sync.initialize(store.snapshot(scope));
-    store.change(scope,'1','PAID');
-    async function* reconnect() {yield {scopeId:scope,kind:'CHECKPOINT',cursor:'2'};}
-    await assert.rejects(runSession(sync,reconnect(),{resume:true}),/encerrada/);
-    assert.equal(sync.orders.get('1').status,'PAID');
-  } finally {store.close();}
+
+test('estatísticas: frame com o estado inteiro, convertido do formato da API', async () => {
+  const store = new Store(':memory:', { initial: initialStats });
+  const next = playGenerator(matchId, 2);
+  for (let i = 0; i < 30; i++) store.update(matchId, s => applyStatEvents(s, [next()], matchId));
+  const sync = createSync('stats', { matchId, api: { snapshot: async () => { throw new Error('não deveria consultar'); } } });
+  await sync.accept(frameOf(store.read(matchId), statsOut));
+  assert.deepEqual(sync.state, store.read(matchId).state);
+  assert.deepEqual(statsFromWire(statsOut(store.read(matchId).state)), store.read(matchId).state);
+  store.close();
 });
-test('escopos têm sequências e históricos independentes',() => {
-  const {store} = setup();
-  try {
-    store.change(scope,'1','PAID'); store.change('outra-loja','1','SHIPPED');
-    assert.equal(store.head(scope),1); assert.equal(store.head('outra-loja'),1);
-    assert.equal(store.changes(scope,'0','1').events[0].order.status,'PAID');
-  } finally {store.close();}
+
+test('frames repetidos, atrasados, fora de ordem ou retidos mais velhos são ignorados', async () => {
+  const sync = new StateSync({ matchId, api: { snapshot: async () => { throw new Error('não deveria consultar'); } } });
+  const frame = (version, home) => ({ matchId, kind: 'STATE', version, state: { ...initialScoreboard(), home } });
+  for (const [v, h] of [[3, 2], [1, 0], [3, 2], [2, 1], [5, 3], [4, 2]]) await sync.accept(frame(v, h));
+  assert.deepEqual([sync.version, sync.state.home, sync.stats.stale], [5, 3, 3]);
 });
-test('projeção, head e histórico são revertidos juntos em falha de escrita',() => {
-  const {store} = setup();
-  try {
-    store.db.exec("CREATE TRIGGER fail_event BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT,'failure'); END;");
-    assert.throws(()=>store.change(scope,'1','PAID'),/failure/);
-    assert.deepEqual(store.snapshot(scope).orders,[]); assert.equal(store.head(scope),0);
-  } finally {store.close();}
+
+test('base provisória aparece antes do primeiro frame, sem marcar synced', async () => {
+  const store = new Store(':memory:', { initial: initialScoreboard }); const api = cachedApi(store);
+  store.update(matchId, s => scoreboardOps.startPeriod(s, { period: 1 }, 0));
+  const sync = new StateSync({ matchId, api }); const views = [];
+  let release; const gate = new Promise(resolve => { release = resolve; });
+  async function* frames() { await gate; yield frameOf(store.read(matchId)); }
+  const session = runSession(sync, frames(), { onUpdate: view => views.push(view) }).catch(() => {});
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual([views[0].version, views[0].synced], [1, false]);
+  release(); await session;
+  assert.equal(views.at(-1).synced, true);
+  store.close();
 });
-test('estado e histórico sobrevivem ao reinício do processo',() => {
-  const dir=mkdtempSync(join(tmpdir(),'sync-example-')); let store;
-  try {
-    store=new Store(join(dir,'db.sqlite')); store.change(scope,'1','PAID'); store.close();
-    store=new Store(join(dir,'db.sqlite'));
-    assert.equal(store.snapshot(scope).cursor,'1');
-    assert.equal(store.changes(scope,'0','1').events[0].order.status,'PAID');
-  } finally {store?.close(); rmSync(dir,{recursive:true,force:true});}
+
+test('falha ao buscar a base não fica guardada: a próxima tentativa refaz', async () => {
+  let fail = true;
+  const sync = new StateSync({ matchId, api: { snapshot: async () => { if (fail) throw new Error('rede'); return { matchId, version: 1, state: initialScoreboard() }; } } });
+  await assert.rejects(sync.startBase(), /rede/);
+  fail = false;
+  assert.equal((await sync.startBase()).version, 1);
 });
-test('cliente rejeita mistura de escopos e lacunas não recuperadas',() => {
-  const {store,sync}=setup();
-  try {
-    assert.throws(()=>sync.initialize({scopeId:'outra',cursor:'0',orders:[]}),/escopo/);
-    assert.throws(()=>sync.apply({scopeId:scope,cursor:'2'}),/Lacuna/);
-  } finally {store.close();}
+
+// Propriedade: vários "edges" (instâncias) com frames retidos de idades diferentes;
+// o cliente troca de instância a qualquer momento e recebe frames perdidos,
+// duplicados, reordenados e retidos mais velhos. A versão nunca regride e, depois de
+// um último frame, todos estão no estado exato do banco.
+test('propriedade: troca de instância com frames retidos de idades diferentes, sem regressão', async () => {
+  for (let seed = 1; seed <= 25; seed++) {
+    let x = seed; const rand = () => (x = (x * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
+    const store = new Store(':memory:', { initial: initialStats });
+    const next = playGenerator(matchId, seed);
+    const edges = Array.from({ length: 3 }, () => ({ retained: null, inflight: [] }));
+    const clients = Array.from({ length: 6 }, () => ({ sync: createSync('stats', { matchId, api: cachedApi(store, statsOut) }), edge: 0, seen: [] }));
+    const deliver = async (client, frame) => { await client.sync.accept(frame); client.seen.push(client.sync.version); };
+    for (let step = 0; step < 300; step++) {
+      const r = rand();
+      if (r < 0.5) {
+        store.update(matchId, s => applyStatEvents(s, [next()], matchId));
+        const frame = frameOf(store.read(matchId), statsOut);
+        for (const edge of edges) if (rand() < 0.85) { edge.inflight.push(frame); if (rand() < 0.1) edge.inflight.push(frame); }
+      } else if (r < 0.8) {
+        const edge = edges[Math.floor(rand() * edges.length)];
+        if (edge.inflight.length) {
+          const [frame] = edge.inflight.splice(Math.floor(rand() * Math.min(3, edge.inflight.length)), 1);
+          if (!edge.retained || frame.version > edge.retained.version || rand() < 0.3) edge.retained = frame; // retido pode ser mais velho
+          for (const client of clients) if (edges[client.edge] === edge) await deliver(client, frame);
+        }
+      } else {
+        const client = clients[Math.floor(rand() * clients.length)];
+        client.edge = Math.floor(rand() * edges.length); client.sync.synced = false; // reconexão em outra instância
+        if (edges[client.edge].retained) await deliver(client, edges[client.edge].retained);
+      }
+    }
+    const final = frameOf(store.read(matchId), statsOut);
+    for (const client of clients) {
+      await deliver(client, final);
+      assert.ok(client.seen.every((v, i) => i === 0 || v >= client.seen[i - 1]), `seed ${seed}: versão regrediu`);
+      assert.equal(client.sync.version, store.version(matchId), `seed ${seed}`);
+      assert.deepEqual(client.sync.state, store.read(matchId).state, `seed ${seed}`);
+    }
+    store.close();
+  }
 });

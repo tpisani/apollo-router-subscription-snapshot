@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Retenção entre instâncias</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: guia de protocolo de transmissão ao vivo. Cada cenário é um diagrama de raias
+   (Cliente · Router · Subgraphs) com passos clicáveis e um painel com o estado dos dois
+   canais do cliente (placar e estatísticas) depois de cada passo. */
+:root {
+  --bg: #f3f6f4; --surface: #ffffff; --ink: #16211c; --muted: #53635b; --line: #d2dcd6; --soft: #e8eeea;
+  --score: #1f50b8; --score-bg: #e5ecfa;
+  --stats: #a54a12; --stats-bg: #fbeadf;
+  --query: #6d36a8; --query-bg: #f0e8f9;
+  --hit: #7a5a00; --hit-bg: #fbf0c8;
+  --db: #1b6e4a; --db-bg: #ddf1e6;
+  --warn: #ad321b; --warn-bg: #fae5df;
+  --sel: #fffbe6;
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d1311; --surface: #141c19; --ink: #e2e9e5; --muted: #97a69e; --line: #29362f; --soft: #1b2521;
+  --score: #88a9ff; --score-bg: #1a2540; --stats: #f2a06a; --stats-bg: #3a2414;
+  --query: #caa3f2; --query-bg: #2a1d3b; --hit: #f0cf6a; --hit-bg: #3a3112;
+  --db: #6ccf9f; --db-bg: #12301f; --warn: #ff8f78; --warn-bg: #3b1a14;
+  --sel: #232a1c; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0d1311; --surface: #141c19; --ink: #e2e9e5; --muted: #97a69e; --line: #29362f; --soft: #1b2521;
+  --score: #88a9ff; --score-bg: #1a2540; --stats: #f2a06a; --stats-bg: #3a2414;
+  --query: #caa3f2; --query-bg: #2a1d3b; --hit: #f0cf6a; --hit-bg: #3a3112;
+  --db: #6ccf9f; --db-bg: #12301f; --warn: #ff8f78; --warn-bg: #3b1a14;
+  --sel: #232a1c; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--f-body); }
+.wrap { max-width: 1120px; margin: 0 auto; padding-block: 28px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 600; text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(28px, 4vw, 38px); }
+h2 { font-size: 24px; }
+h3 { font-size: 15px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+p { margin: 0; max-width: 70ch; }
+code, .mono { font-family: var(--f-mono); font-size: 12.5px; }
+.lede { color: var(--muted); margin-top: 10px; font-size: 16px; }
+header.top { display: grid; gap: 6px; margin-bottom: 26px; }
+
+.scoreline { display: inline-flex; align-items: center; gap: 10px; font: 600 15px var(--f-display); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; width: fit-content; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.scoreline .clock { font: 500 13px var(--f-mono); color: var(--muted); }
+
+.channels { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.channel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 8px; min-width: 0; border-top: 3px solid var(--c); }
+.channel.c-score { --c: var(--score); }
+.channel.c-stats { --c: var(--stats); }
+.channel h2 { font-size: 20px; }
+.channel dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13.5px; }
+.channel dt { color: var(--muted); }
+.channel dd { margin: 0; }
+.pieces { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 22px; }
+.piece { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.piece .k { font-family: var(--f-mono); font-size: 12.5px; word-break: break-word; }
+.piece p { font-size: 13.5px; color: var(--muted); }
+.tag { display: inline-flex; align-items: center; gap: 6px; font: 500 11px/1 var(--f-body); letter-spacing: .05em; text-transform: uppercase; padding: 4px 7px; border-radius: 4px; width: fit-content; }
+.t-score { color: var(--score); background: var(--score-bg); }
+.t-stats { color: var(--stats); background: var(--stats-bg); }
+.t-query { color: var(--query); background: var(--query-bg); }
+.t-hit { color: var(--hit); background: var(--hit-bg); }
+.t-db { color: var(--db); background: var(--db-bg); }
+.t-warn { color: var(--warn); background: var(--warn-bg); }
+.t-miss { color: var(--muted); background: var(--soft); }
+
+.tablebox { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 18px; }
+table { border-collapse: collapse; width: 100%; min-width: 780px; font-size: 13.5px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 500; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+tr:last-child td { border-bottom: 0; }
+td a { color: var(--ink); font-weight: 600; text-decoration-color: var(--line); text-underline-offset: 3px; }
+
+nav.jump { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 10px; display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+@media (max-width: 700px) { nav.jump { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; } nav.jump a { white-space: nowrap; flex: none; } }
+nav.jump a { font-size: 13px; color: var(--ink); text-decoration: none; padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+nav.jump a:hover, nav.jump a:focus-visible { border-color: var(--score); outline: none; }
+
+section.scen { padding-top: 34px; display: grid; gap: 14px; scroll-margin-top: 60px; }
+.scen-head { display: grid; gap: 6px; }
+.when { color: var(--muted); }
+.start { display: flex; flex-wrap: wrap; gap: 8px; }
+.start span { font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; }
+.start b { font-weight: 600; }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 14px; align-items: start; }
+@media (max-width: 860px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+
+.diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; }
+.lanes { --num: 34px; min-width: 620px; display: grid; grid-template-columns: var(--num) repeat(3, minmax(0, 1fr)); position: relative;
+  background-image: linear-gradient(var(--line), var(--line)), linear-gradient(var(--line), var(--line)), linear-gradient(var(--line), var(--line));
+  background-size: 1px 100%; background-repeat: no-repeat;
+  background-position: calc(var(--num) + (100% - var(--num)) / 6) 0, calc(var(--num) + (100% - var(--num)) / 2) 0, calc(var(--num) + 5 * (100% - var(--num)) / 6) 0; }
+.lane-h { position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--line); padding: 10px 6px; text-align: center; font: 600 13px/1.2 var(--f-display); }
+.lane-h small { display: block; font: 400 11.5px/1.3 var(--f-body); color: var(--muted); }
+.step { display: contents; }
+.step > * { cursor: pointer; }
+.n { grid-column: 1; position: relative; z-index: 1; display: grid; place-items: start center; padding-top: 14px; font: 500 12px var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.cell { padding: 10px 8px; position: relative; z-index: 1; min-width: 0; }
+.row-bg { grid-column: 1 / -1; z-index: 0; }
+.step.sel .row-bg { background: var(--sel); box-shadow: inset 3px 0 0 var(--score); }
+.step:hover .row-bg { background: var(--soft); }
+.step.sel:hover .row-bg { background: var(--sel); }
+
+.arrow { --n: 1; padding-inline: calc(50% / var(--n)); display: grid; gap: 3px; }
+.arrow .lbl { font-size: 13px; text-align: center; line-height: 1.35; }
+.arrow .line { height: 2px; position: relative; background: currentColor; }
+.arrow.dash .line { background: repeating-linear-gradient(90deg, currentColor 0 7px, transparent 7px 12px); }
+.arrow .line::after { content: ""; position: absolute; top: -5px; border: 6px solid transparent; }
+.arrow.right .line::after { right: -2px; border-left: 9px solid currentColor; border-right: 0; }
+.arrow.left .line::after { left: -2px; border-right: 9px solid currentColor; border-left: 0; }
+.arrow .code { font-family: var(--f-mono); font-size: 11.5px; color: var(--ink); text-align: center; word-break: break-word; }
+.arrow .badges, .box .badges { display: flex; justify-content: center; gap: 4px; flex-wrap: wrap; }
+.k-score { color: var(--score); }
+.k-stats { color: var(--stats); }
+.k-query { color: var(--query); }
+.k-db { color: var(--db); }
+.k-err { color: var(--warn); }
+.box { border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 7px 9px; font-size: 13px; display: grid; gap: 4px; }
+.box.k-db { border-color: color-mix(in srgb, var(--db) 45%, var(--line)); }
+.box.k-err { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.box.k-score { border-color: color-mix(in srgb, var(--score) 45%, var(--line)); }
+.box.k-stats { border-color: color-mix(in srgb, var(--stats) 45%, var(--line)); }
+.box .t { color: var(--ink); }
+.box .code { font-family: var(--f-mono); font-size: 11.5px; color: var(--muted); word-break: break-word; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 12px; position: sticky; top: 64px; }
+@media (max-width: 860px) { .panel { position: static; } }
+.panel .stepname { font-size: 13.5px; }
+.chan { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: baseline; font-size: 13.5px; padding: 8px 10px; border-radius: 6px; background: var(--bg); border-left: 3px solid var(--c); }
+.chan.c-score { --c: var(--score); } .chan.c-stats { --c: var(--stats); }
+.chan.off { opacity: .55; }
+.chan b { font-weight: 600; grid-column: 1 / -1; }
+.chan dt { color: var(--muted); } .chan dd { margin: 0; font: 13px var(--f-mono); font-variant-numeric: tabular-nums; }
+.screen { border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.s-none { background: var(--soft); color: var(--muted); }
+.s-prov { background: var(--hit-bg); color: var(--hit); }
+.s-catch { background: var(--query-bg); color: var(--query); }
+.s-sync { background: var(--db-bg); color: var(--db); }
+.panel .why { font-size: 13.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; }
+.controls { display: flex; gap: 6px; flex-wrap: wrap; }
+button { font: 500 13px var(--f-body); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+button:hover { border-color: var(--score); }
+button:focus-visible, .n:focus-visible { outline: 2px solid var(--score); outline-offset: -2px; }
+.tally { display: flex; flex-wrap: wrap; gap: 6px; }
+.result { font-size: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; display: grid; gap: 6px; }
+.result b { font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 16px; font-size: 13px; color: var(--muted); margin: 0 0 18px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 22px; height: 2px; background: currentColor; display: inline-block; }
+.sw.dash { background: repeating-linear-gradient(90deg, currentColor 0 5px, transparent 5px 8px); }
+footer { margin-top: 40px; color: var(--muted); font-size: 13px; }
+@media (prefers-reduced-motion: no-preference) { .step .row-bg { transition: background .15s; } }
+.retained { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font: 13px var(--f-mono); padding: 8px 10px; border-radius: 6px; background: var(--hit-bg); color: var(--ink); }
+.screen.s-prov { background: var(--soft); color: var(--muted); }
+</style>
+
+<style>body { margin: 0; } :root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); } [hidden] { display: none !important; } .banner { font-size: 13.5px; background: var(--hit-bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; } .banner a { color: inherit; }</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h3>poc-graphql-subscriptions · branch claude/realtime-push-feed</h3>
+    <h1>Retenção do último estado com várias instâncias</h1>
+    <p class="lede">Como cada cliente chega ao estado atual quando todo frame traz o estado inteiro e cada instância do Router (aqui, o edge que emula o plugin) guarda o último frame de cada subscription deduplicada. Há várias instâncias atrás de um balanceador, sem afinidade de sessão. Clique em um passo para ver o estado do cliente e o frame retido, ou use <b>Reproduzir</b>.</p>
+    <div class="scoreline" aria-label="Partida de exemplo">Atlético Serrano <span>1 × 0</span> União Litoral <span class="clock">2º T · 63:12</span></div>
+  </header>
+
+  <div class="channels">
+    <div class="channel c-score">
+      <span class="tag t-score">o que mudou</span>
+      <h2>Um tipo de frame: STATE { version, state }</h2>
+      <dl>
+        <dt>Placar</dt><dd>a cada commit, na hora, e a cada 1 s</dd>
+        <dt>Estatísticas</dt><dd>limitador: na hora quando calmo, no máximo 1 a cada 500 ms numa rajada, e a cada 1 s</dd>
+        <dt>Cliente</dt><dd>fica com o frame de maior versão; ignora os outros. Sem lacuna, sem histórico, sem query de recuperação.</dd>
+      </dl>
+    </div>
+    <div class="channel c-stats">
+      <span class="tag t-stats">retenção · por instância</span>
+      <h2>O último frame de cada upstream</h2>
+      <dl>
+        <dt>Guarda</dt><dd>cada instância guarda o último frame de cada upstream deduplicado que ela tem aberto</dd>
+        <dt>Entrega</dt><dd>quem entra num upstream já aberto recebe esse frame na hora</dd>
+        <dt>Chave</dt><dd>operação + variáveis + identidade (<code>authorization</code>)</dd>
+        <dt>Some</dt><dd>junto com o upstream, quando o último assinante sai</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="pieces">
+    <div class="piece"><span class="tag t-db">medido</span><div class="k">12 ms × 1.997 ms</div>
+      <p>Entrada numa partida parada com retenção, contra a espera pelo frame periódico de 2 s sem ela.</p></div>
+    <div class="piece"><span class="tag t-db">medido</span><div class="k">~150 ms</div>
+      <p>Para todos os clientes de uma instância derrubada voltarem a estar sincronizados em outra, sem regressão de versão.</p></div>
+    <div class="piece"><span class="tag t-db">medido</span><div class="k">6 streams, não 30</div>
+      <p>30 clientes em 2 partidas atrás de 3 instâncias: streams por canal no subgraph = instâncias × partidas.</p></div>
+    <div class="piece"><span class="tag t-warn">não verificado</span><div class="k">plugin nativo (Rust)</div>
+      <p>No Apollo Router, a retenção exigiria um plugin num build customizado. Aqui ela é emulada no edge.</p></div>
+  </div>
+
+  <div class="legend" aria-label="Legenda">
+    <span class="k-score"><i class="sw"></i>placar</span>
+    <span class="k-stats"><i class="sw"></i>estatísticas</span>
+    <span class="k-query"><i class="sw"></i>query</span>
+    <span class="k-query"><i class="sw dash"></i>resposta</span>
+    <span><span class="tag t-hit">RETIDO</span> frame entregue pela instância</span>
+    <span><span class="tag t-db">banco</span> commit ou leitura</span>
+    <span><span class="tag t-warn">falha</span> queda</span>
+  </div>
+
+  <div class="tablebox">
+    <table>
+      <thead><tr><th>Cenário</th><th>Quando acontece</th><th>Subscriptions</th><th>Queries</th><th>Resultado</th></tr></thead>
+      <tbody id="summary"></tbody>
+    </table>
+  </div>
+
+  <nav class="jump" id="jump" aria-label="Cenários"></nav>
+  <div id="scenarios"></div>
+
+  <footer>Números de exemplo: partida <code>m1</code>, instâncias A, B e C atrás de um balanceador round-robin. Medições: <code>tests/scale.test.mjs</code> e <code>npm run bench</code> no branch. Código: <code>scripts/edge.mjs</code> (retenção, identidade), <code>scripts/balancer.mjs</code>, <code>src/channels.mjs</code> (limitador), <code>client/sync.mjs</code> (<code>StateSync</code>).</footer>
+</div>
+
+<script>
+const L = { c: 2, r: 3, s: 4 };
+// st: [versão do placar, synced, versão das estatísticas, synced, tela, frame retido na instância]
+const scenarios = [
+  {
+    id: 'primeiro', name: 'Primeiro cliente numa instância',
+    when: 'O balanceador manda o cliente para a instância A, onde ninguém assina a partida ainda.',
+    start: [['Instância A', 'sem upstream para m1'], ['Placar no banco', 'versão 3'], ['Estatísticas no banco', 'versão 40'], ['Cliente', 'sem estado']],
+    subs: 'abre os dois upstreams', queries: '0 (base opcional)', outcome: 'certo no frame inicial do subgraph',
+    channels: ['score', 'stats'],
+    result: 'Sem upstream na instância não há frame retido, e não precisa: ao abrir o upstream, o subgraph manda <b>na hora</b> um frame com o estado atual. A instância passa a guardá-lo.',
+    tally: [['t-score', '2 subscriptions'], ['t-query', '0 queries'], ['t-db', 'frame inicial do subgraph']],
+    steps: [
+      { a: ['c', 'r'], k: 'score', lbl: 'Subscriptions do placar e das estatísticas (via balanceador → A)', code: 'scoreboardUpdates · statsUpdates (matchId: "m1")', st: [null, false, null, false, 'none', 'A: nada guardado'],
+        why: 'Pode pedir em paralelo a base cacheada (minVersion 0) para desenhar na hora; é opcional.' },
+      { a: ['r', 's'], k: 'score', lbl: 'A não tem upstream para essas chaves: abre um por canal', code: 'graphql-ws → scores · stats', st: [null, false, null, false, 'none', 'A: nada guardado'],
+        why: 'Um upstream por (canal, partida, identidade) nesta instância.' },
+      { box: 's', k: 'db', lbl: 'Os hubs registram o novo assinante e enviam o estado atual na hora', code: 'STATE v3 (placar) · STATE v40 (estatísticas)', st: [null, false, null, false, 'none', 'A: nada guardado'],
+        why: 'Todo novo upstream recebe um frame inicial. É o que torna o compartilhamento entre instâncias desnecessário.' },
+      { a: ['s', 'c'], k: 'score', lbl: 'A repassa e guarda os dois frames', code: 'STATE v3 · STATE v40', st: [3, true, 40, true, 'sync', 'A: placar v3 · estatísticas v40'],
+        why: 'Cliente sincronizado nos dois canais sem nenhuma query.' }
+    ]
+  },
+  {
+    id: 'tardio', name: 'Late joiner numa partida parada',
+    when: 'Intervalo de jogo: nenhum commit há minutos. Um cliente novo cai na instância A, que já tem os upstreams abertos.',
+    start: [['Instância A', 'upstreams abertos'], ['Frames retidos em A', 'placar v4 · estatísticas v812'], ['Commits', 'nenhum'], ['Cliente', 'sem estado']],
+    subs: 'entra nos upstreams de A', queries: '0', outcome: 'estado na hora (12 ms medidos)',
+    channels: ['score', 'stats'],
+    result: 'O cliente recebe o estado <b>na hora</b>, sem esperar o próximo frame periódico. Medido com periódico de 2 s: <b>12 ms com retenção</b>, 1.997 ms sem.',
+    tally: [['t-hit', '2 frames retidos'], ['t-query', '0 queries'], ['t-score', '0 frames novos do subgraph']],
+    steps: [
+      { a: ['c', 'r'], k: 'score', lbl: 'Subscriptions (via balanceador → A)', code: 'scoreboardUpdates · statsUpdates (matchId: "m1")', st: [null, false, null, false, 'none', 'A: placar v4 · estatísticas v812'],
+        why: 'Mesmas chaves dos clientes que já estão em A.' },
+      { box: 'r', k: 'score', lbl: 'Deduplicação: entra nos upstreams que já existem', code: 'nada vai ao subgraph', st: [null, false, null, false, 'none', 'A: placar v4 · estatísticas v812'],
+        why: 'Sem retenção, o cliente esperaria o próximo frame: um commit (que não vem, a partida está parada) ou o periódico.' },
+      { a: ['r', 'c'], k: 'score', lbl: 'A escreve primeiro os frames retidos', badges: [['t-hit', 'RETIDO'], ['t-hit', 'RETIDO']], code: 'STATE v4 · STATE v812', st: [4, true, 812, true, 'sync', 'A: placar v4 · estatísticas v812'],
+        why: 'Estado inteiro com versão: suficiente para a tela, sem query. Depois disso o cliente recebe os frames ao vivo como os outros.' }
+    ]
+  },
+  {
+    id: 'gol', name: 'Gol ao vivo',
+    when: 'Caminho normal: clientes conectados em várias instâncias e sai um gol.',
+    start: [['Clientes', 'em A, B e C'], ['Placar no banco', 'versão 4'], ['Retidos', 'placar v4 em A, B, C'], ['Upstreams de placar', '1 por instância']],
+    subs: 'já abertas', queries: '0', outcome: 'gol em ~10 ms; retidos atualizados',
+    channels: ['score', 'stats'],
+    result: 'Um frame sai do subgraph para cada instância (não para cada cliente). Cada instância replica para os seus clientes e <b>atualiza o frame retido</b>, então quem entrar depois já recebe o placar novo.',
+    tally: [['t-score', '1 frame por instância'], ['t-query', '0 queries']],
+    steps: [
+      { box: 's', k: 'db', lbl: 'scores: scoreGoal (AWAY) → 1 × 1, versão 5', code: 'BEGIN IMMEDIATE … COMMIT', st: [4, true, 812, true, 'sync', 'A, B, C: placar v4'], why: 'Publicado só depois do COMMIT.' },
+      { a: ['s', 'r'], k: 'score', lbl: 'O hub envia na hora, um frame por upstream (A, B e C)', code: 'STATE v5', st: [4, true, 812, true, 'sync', 'A, B, C: placar v4'],
+        why: 'Streams no subgraph = instâncias × partidas × canais. Com 3 instâncias são 3 envios, para mil ou um milhão de clientes.' },
+      { box: 'r', k: 'score', lbl: 'Cada instância replica para os seus clientes e troca o frame retido', code: 'retido: v4 → v5', st: [4, true, 812, true, 'sync', 'A, B, C: placar v5'],
+        why: 'O frame retido é sempre o último que passou por aquele upstream.' },
+      { a: ['r', 'c'], k: 'score', lbl: 'Frame chega', code: 'STATE v5', st: [5, true, 812, true, 'sync', 'A, B, C: placar v5'],
+        why: 'Versão 5 > 4: substitui. Medido: p50 10–14 ms com 1 ou 3 instâncias.' }
+    ]
+  },
+  {
+    id: 'rajada', name: 'Rajada de estatísticas',
+    when: 'Ataque com 200 lances/s por 3 s.',
+    start: [['Cliente', 'estatísticas v812'], ['Ritmo', '200 lances/s'], ['Limitador', '500 ms'], ['Retido em A', 'estatísticas v812']],
+    subs: 'já abertas', queries: '0', outcome: '≤ 2 frames/s, cada um com o estado inteiro',
+    channels: ['score', 'stats'],
+    result: 'O limitador transforma 600 commits em ~6 frames. Cada um traz o estado inteiro mais recente, e cada um atualiza o frame retido.',
+    tally: [['t-stats', '~2 frames/s'], ['t-query', '0 queries']],
+    steps: [
+      { box: 's', k: 'db', lbl: 'Primeiro lance depois de um período calmo', code: 'versão 813', st: [5, true, 812, true, 'sync', 'A: estatísticas v812'],
+        why: 'Nada saiu nos últimos 500 ms: o frame sai na hora.' },
+      { a: ['s', 'c'], k: 'stats', lbl: 'Frame imediato', code: 'STATE v813', st: [5, true, 813, true, 'sync', 'A: estatísticas v813'], why: 'Um lance isolado chega em ms.' },
+      { box: 's', k: 'db', lbl: 'Os próximos 100 lances chegam dentro da janela', code: 'versões 814 … 913', st: [5, true, 813, true, 'sync', 'A: estatísticas v813'],
+        why: 'O hub não envia nada até a janela fechar; guarda só o estado mais recente.' },
+      { a: ['s', 'c'], k: 'stats', lbl: 'Fim da janela: um frame com o estado mais recente', code: 'STATE v913, committedAt = do lance 814', st: [5, true, 913, true, 'sync', 'A: estatísticas v913'],
+        why: 'committedAt é o do commit mais antigo ainda não enviado: a latência medida é a do pior dado do frame (~500 ms).' },
+      { box: 'r', k: 'score', lbl: 'Um gol no meio da rajada vai por outro upstream', code: 'STATE v6 do placar, na hora', st: [6, true, 913, true, 'sync', 'A: placar v6 · estatísticas v913'],
+        why: 'Placar e estatísticas não compartilham fila nem limitador.' }
+    ]
+  },
+  {
+    id: 'troca', name: 'Reconexão em outra instância',
+    when: 'A rede do cliente oscila. Na reconexão, o balanceador o manda para a instância B, cujo frame retido ficou um pouco para trás.',
+    start: [['Cliente', 'estatísticas v42 (via A)'], ['Retido em B', 'estatísticas v41'], ['Próximo frame', 'v43'], ['Afinidade de sessão', 'nenhuma']],
+    subs: 'reabre em B', queries: '0', outcome: 'frame retido mais velho ignorado; nunca regride',
+    channels: ['stats'],
+    result: 'O frame retido de B é <b>mais velho</b> que o que o cliente tem e é ignorado. A tela não volta no tempo, e o próximo frame (v43) segue normalmente. O teste de propriedade com 3 instâncias afirma isso em 25 sementes.',
+    tally: [['t-hit', 'retido v41 ignorado'], ['t-stats', 'v43 aplicado'], ['t-query', '0 queries']],
+    steps: [
+      { box: 'c', k: 'err', lbl: 'Conexão com A cai', code: 'estado mantido na tela: v42', st: [6, false, 42, false, 'prov', 'B: estatísticas v41'],
+        why: 'As instâncias recebem os frames com diferenças de milissegundos; B pode estar um frame atrás de A.' },
+      { a: ['c', 'r'], k: 'stats', lbl: 'Reconecta; o balanceador escolhe B', code: 'statsUpdates (matchId: "m1")', st: [6, false, 42, false, 'prov', 'B: estatísticas v41'], why: 'Qualquer instância serve: não há afinidade.' },
+      { a: ['r', 'c'], k: 'stats', lbl: 'B entrega o frame retido', badges: [['t-hit', 'RETIDO']], code: 'STATE v41', st: [6, false, 42, true, 'sync', 'B: estatísticas v41'],
+        why: '41 ≤ 42: ignorado, sem regressão. O cliente já conta como sincronizado nesta conexão, porque recebeu um frame.' },
+      { a: ['s', 'c'], k: 'stats', lbl: 'Próximo frame ao vivo', code: 'STATE v43', st: [6, true, 43, true, 'sync', 'B: estatísticas v43'], why: 'Aplicado; B e o cliente estão em dia.' }
+    ]
+  },
+  {
+    id: 'queda', name: 'Uma instância cai no meio do jogo',
+    when: 'A instância B para (deploy, falha). Os clientes dela reconectam pelo balanceador, que só tem A e C vivos.',
+    start: [['Instâncias', 'A, B, C → A, C'], ['Clientes em B', 'perdem a conexão'], ['Upstreams em A e C', 'abertos, com frames retidos'], ['Jogo', 'lances e gols contínuos']],
+    subs: 'reabre em A ou C', queries: '0', outcome: 'todos sincronizados de novo em ~150 ms',
+    channels: ['score', 'stats'],
+    result: 'Os clientes de B caem em instâncias que já têm o upstream aberto e o frame retido, então se recuperam em <b>~150 ms</b> (medido em 3 rodadas: 145–163 ms), sem esperar o frame periódico e sem regressão de versão.',
+    tally: [['t-warn', 'instância B fora'], ['t-hit', 'retidos em A/C'], ['t-query', '0 queries']],
+    steps: [
+      { box: 'r', k: 'err', lbl: 'Instância B para; o balanceador a remove', code: 'conexões de B encerradas', st: [6, false, 913, false, 'prov', 'A, C: placar v6 · estatísticas v913'],
+        why: 'Os clientes continuam mostrando o último estado e marcam os canais como não sincronizados.' },
+      { a: ['c', 'r'], k: 'score', lbl: 'Reconexão com backoff (100 ms no teste) → A ou C', code: 'scoreboardUpdates · statsUpdates', st: [6, false, 913, false, 'prov', 'A, C: placar v6 · estatísticas v913'],
+        why: 'Se o balanceador escolhesse uma instância fora, ele tentaria a próxima.' },
+      { a: ['r', 'c'], k: 'score', lbl: 'A/C entregam os frames retidos', badges: [['t-hit', 'RETIDO'], ['t-hit', 'RETIDO']], code: 'STATE v6 · STATE v915', st: [6, true, 915, true, 'sync', 'A, C: placar v6 · estatísticas v915'],
+        why: 'Se a instância nova não tivesse o upstream aberto, abriria um e receberia o frame inicial do subgraph (cenário 1).' },
+      { box: 's', k: 'score', lbl: 'Subgraph: os streams de B somem; os de A e C continuam', code: 'streams = 2 instâncias × partidas × canais', st: [6, true, 915, true, 'sync', 'A, C: placar v6 · estatísticas v915'],
+        why: 'Nenhum estado precisa ser migrado entre instâncias: cada uma recebe tudo do subgraph.' }
+    ]
+  },
+  {
+    id: 'identidade', name: 'Identidades diferentes na mesma instância',
+    when: 'Dois usuários com tokens diferentes assinam a mesma partida na instância A.',
+    start: [['Instância A', 'chave inclui authorization'], ['Cliente 1', 'Bearer a'], ['Cliente 2', 'Bearer b'], ['Cliente 3', 'Bearer a']],
+    subs: '2 upstreams (um por token)', queries: '0', outcome: 'sem frame retido cruzado',
+    channels: ['score'],
+    result: 'Tokens diferentes não compartilham upstream nem frame retido. Só quem tem a mesma identidade recebe o frame guardado (teste: 2 upstreams; 1 entrega de retido, para o cliente 3).',
+    tally: [['t-score', '2 upstreams'], ['t-hit', '1 retido (mesmo token)']],
+    steps: [
+      { a: ['c', 'r'], k: 'score', lbl: 'Cliente 1 (Bearer a)', code: 'chave: Scoreboard + m1 + "Bearer a"', st: [null, false, undefined, false, 'none', 'A[a]: nada'], why: 'Primeiro com essa identidade: abre o upstream.' },
+      { a: ['s', 'c'], k: 'score', lbl: 'Frame inicial do subgraph', code: 'STATE v6', st: [6, true, undefined, false, 'sync', 'A[a]: placar v6'], why: '' },
+      { a: ['c', 'r'], k: 'score', lbl: 'Cliente 2 (Bearer b)', code: 'chave: Scoreboard + m1 + "Bearer b"', st: [6, true, undefined, false, 'sync', 'A[a]: v6 · A[b]: nada'],
+        why: 'Outra chave: outro upstream, e o frame retido de "a" não é entregue a "b". Em produção, a autorização também precisa valer no subgraph.' },
+      { a: ['c', 'r'], k: 'score', lbl: 'Cliente 3 (Bearer a)', badges: [['t-hit', 'RETIDO']], code: 'mesma chave do cliente 1 → STATE v6 na hora', st: [6, true, undefined, false, 'sync', 'A[a]: v6 · A[b]: v6'], why: 'Mesma identidade: compartilha o upstream e recebe o retido.' }
+    ]
+  },
+  {
+    id: 'limpeza', name: 'Último assinante sai',
+    when: 'A partida acaba e os clientes de uma instância fecham a tela.',
+    start: [['Instância A', 'upstreams de m1 abertos'], ['Retidos em A', 'placar v9 · estatísticas v2104'], ['Assinantes em A', '1 → 0'], ['Partida', 'encerrada']],
+    subs: 'fecha os upstreams', queries: '0', outcome: 'nada fica guardado',
+    channels: ['score', 'stats'],
+    result: 'Os frames retidos vivem dentro do upstream. Quando o último assinante sai, os dois somem, e nada fica guardado para partidas que acabaram. Quem abrir a partida depois cai no cenário 1.',
+    tally: [['t-db', '0 upstreams'], ['t-db', '0 retidos']],
+    steps: [
+      { box: 'c', k: 'score', lbl: 'Último cliente de m1 em A fecha a tela', code: 'conexão encerrada', st: [9, true, 2104, true, 'sync', 'A: placar v9 · estatísticas v2104'], why: '' },
+      { box: 'r', k: 'score', lbl: 'A fecha os upstreams sem assinantes e descarta os frames retidos', code: 'upstreams 0 · retidos 0', st: [9, true, 2104, true, 'sync', 'A: nada guardado'],
+        why: 'No teste de limpeza, depois que todos saem, nenhuma instância guarda upstream nem frame retido.' },
+      { box: 's', k: 'db', lbl: 'Hubs sem assinantes param os timers da partida', code: 'streams no subgraph: 0', st: [9, true, 2104, true, 'sync', 'A: nada guardado'], why: '' }
+    ]
+  }
+];
+
+const screenText = { none: 'Tela vazia', prov: 'Mostrando o último estado conhecido (não sincronizado)', sync: 'Tudo sincronizado' };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+document.getElementById('summary').innerHTML = scenarios.map((s, i) => `<tr>
+  <td><a href="#${s.id}">${i + 1}. ${esc(s.name)}</a></td><td>${esc(s.when)}</td><td>${esc(s.subs)}</td><td>${esc(s.queries)}</td><td>${esc(s.outcome)}</td></tr>`).join('');
+document.getElementById('jump').innerHTML = scenarios.map((s, i) => `<a href="#${s.id}">${i + 1}. ${esc(s.name)}</a>`).join('');
+
+function stepHTML(step, i) {
+  const badges = step.badges ? `<div class="badges">${step.badges.map(([c, t]) => `<span class="tag ${c}">${esc(t)}</span>`).join('')}</div>` : '';
+  const row = `grid-row:${i + 2}`;
+  let body;
+  if (step.box) {
+    body = `<div class="cell" style="${row};grid-column:${L[step.box]}"><div class="box k-${step.k}"><span class="t">${esc(step.lbl)}</span>${step.code ? `<span class="code">${esc(step.code)}</span>` : ''}${badges}</div></div>`;
+  } else {
+    const [from, to] = step.a.map(x => L[x]);
+    const lo = Math.min(from, to), hi = Math.max(from, to);
+    body = `<div class="cell arrow k-${step.k} ${from < to ? 'right' : 'left'} ${step.dash ? 'dash' : ''}" style="${row};grid-column:${lo} / ${hi + 1};--n:${hi - lo + 1}">
+      <span class="lbl">${esc(step.lbl)}</span><span class="line"></span><span class="code">${esc(step.code)}</span>${badges}</div>`;
+  }
+  return `<div class="step" data-i="${i}">
+    <div class="row-bg" style="${row}"></div><div class="n" style="${row}" tabindex="0" role="button" aria-label="Passo ${i + 1}: ${esc(step.lbl)}">${i + 1}</div>${body}</div>`;
+}
+
+function chanHTML(cls, title, version, synced, subscribed) {
+  if (!subscribed) return `<dl class="chan ${cls} off"><b>${title}</b><dt>status</dt><dd>não assinado nesta tela</dd></dl>`;
+  return `<dl class="chan ${cls}"><b>${title}</b><dt>versão</dt><dd>${version === null ? '—' : version}</dd><dt>synced</dt><dd>${synced ? 'true' : 'false'}</dd></dl>`;
+}
+
+function render(s, idx) {
+  const el = document.createElement('section');
+  el.className = 'scen'; el.id = s.id;
+  el.innerHTML = `
+    <div class="scen-head"><h2>${idx + 1}. ${esc(s.name)}</h2><p class="when">${esc(s.when)}</p></div>
+    <div class="start">${s.start.map(([k, v]) => `<span>${esc(k)}: <b>${esc(v)}</b></span>`).join('')}</div>
+    <div class="cols">
+      <div class="diagram"><div class="lanes">
+        <div class="lane-h" style="grid-row:1;grid-column:1"></div>
+        <div class="lane-h" style="grid-row:1;grid-column:2">Cliente<small>StateSync</small></div>
+        <div class="lane-h" style="grid-row:1;grid-column:3">Balanceador + instâncias<small>dedup + retenção por instância</small></div>
+        <div class="lane-h" style="grid-row:1;grid-column:4">Subgraphs<small>scores · stats</small></div>
+        ${s.steps.map(stepHTML).join('')}
+      </div></div>
+      <aside class="panel" aria-live="polite">
+        <h3>Estado do cliente</h3>
+        <div class="stepname"></div>
+        <div class="chans"></div>
+        <div class="retained"></div>
+        <div class="screen"></div>
+        <p class="why"></p>
+        <div class="controls">
+          <button type="button" id="prev-${s.id}" data-act="prev">← Anterior</button>
+          <button type="button" id="next-${s.id}" data-act="next">Próximo →</button>
+          <button type="button" id="play-${s.id}" data-act="play">Reproduzir</button>
+        </div>
+      </aside>
+    </div>
+    <div class="result"><div class="tally">${s.tally.map(([c, t]) => `<span class="tag ${c}">${esc(t)}</span>`).join('')}</div><p>${s.result}</p></div>`;
+  document.getElementById('scenarios').appendChild(el);
+
+  let cur = 0, timer = null;
+  const steps = [...el.querySelectorAll('.step')];
+  const panel = el.querySelector('.panel');
+  const playBtn = el.querySelector('[data-act="play"]');
+  const hasStats = s.channels.includes('stats'), hasScore = s.channels.includes('score');
+  function select(i) {
+    cur = Math.max(0, Math.min(s.steps.length - 1, i));
+    steps.forEach((x, j) => x.classList.toggle('sel', j === cur));
+    const [pv, ps, ev, es, screen, retained] = s.steps[cur].st;
+    panel.querySelector('.stepname').innerHTML = `<b>Depois do passo ${cur + 1}</b> de ${s.steps.length}: ${esc(s.steps[cur].lbl)}`;
+    panel.querySelector('.chans').innerHTML = chanHTML('c-score', 'Placar', pv, ps, hasScore) + chanHTML('c-stats', 'Estatísticas', ev, es, hasStats);
+    panel.querySelector('.retained').innerHTML = `<span class="tag t-hit">frame retido</span> <span>${esc(retained)}</span>`;
+    const box = panel.querySelector('.screen');
+    box.className = `screen s-${screen}`; box.textContent = screenText[screen];
+    panel.querySelector('.why').textContent = s.steps[cur].why || '';
+  }
+  function stop() { clearInterval(timer); timer = null; playBtn.textContent = 'Reproduzir'; }
+  steps.forEach((x, j) => {
+    x.addEventListener('click', () => { stop(); select(j); });
+    x.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); stop(); select(j); } });
+  });
+  el.querySelector('[data-act="prev"]').addEventListener('click', () => { stop(); select(cur - 1); });
+  el.querySelector('[data-act="next"]').addEventListener('click', () => { stop(); select(cur + 1); });
+  playBtn.addEventListener('click', () => {
+    if (timer) return stop();
+    if (cur >= s.steps.length - 1) select(0);
+    playBtn.textContent = 'Pausar';
+    timer = setInterval(() => { if (cur >= s.steps.length - 1) return stop(); select(cur + 1); }, 1700);
+  });
+  select(0);
+}
+scenarios.forEach(render);
+</script>
+
+</body>
+</html>

@@ -1,98 +1,78 @@
 import { DatabaseSync } from 'node:sqlite';
+import { diff } from './patch.mjs';
 
 export class SyncError extends Error {
   constructor(message, code) { super(message); this.code = code; }
 }
 
+// Um documento versionado por partida: o estado atual e um contador. Sem log de
+// eventos: quem precisa recuperar pede um snapshot com versão mínima.
+// Cada subgraph tem o seu Store (placar e estatísticas não compartilham banco).
 export class Store {
-  constructor(path = ':memory:') {
+  constructor(path = ':memory:', { initial, onCommit = () => {}, clock = Date.now } = {}) {
     this.db = new DatabaseSync(path);
+    this.initial = initial; this.onCommit = onCommit; this.clock = clock;
     this.db.exec(`
       PRAGMA journal_mode=WAL;
       PRAGMA busy_timeout=5000;
-      CREATE TABLE IF NOT EXISTS scopes (
-        id TEXT PRIMARY KEY, head INTEGER NOT NULL DEFAULT 0, floor INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE IF NOT EXISTS orders (
-        scope TEXT NOT NULL, id TEXT NOT NULL, version INTEGER NOT NULL,
-        status TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(scope,id));
-      CREATE TABLE IF NOT EXISTS events (
-        scope TEXT NOT NULL, seq INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(scope,seq));
+      CREATE TABLE IF NOT EXISTS docs (key TEXT PRIMARY KEY, version INTEGER NOT NULL, state TEXT NOT NULL);
     `);
+    this.q = {
+      get: this.db.prepare('SELECT version, state FROM docs WHERE key = ?'),
+      put: this.db.prepare(`INSERT INTO docs(key, version, state) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET version = excluded.version, state = excluded.state`)
+    };
   }
-  ensure(scope) {
-    if (!scope || scope.length > 100) throw new SyncError('Escopo inválido', 'BAD_USER_INPUT');
-    this.db.prepare('INSERT OR IGNORE INTO scopes(id) VALUES (?)').run(scope);
+
+  #check(key) {
+    if (typeof key !== 'string' || !key || key.length > 100) throw new SyncError('Partida inválida', 'BAD_USER_INPUT');
   }
-  head(scope) { this.ensure(scope); return this.db.prepare('SELECT head FROM scopes WHERE id=?').get(scope).head; }
-  transaction(fn, write = false) {
-    this.db.exec(write ? 'BEGIN IMMEDIATE' : 'BEGIN');
-    try { const result = fn(); this.db.exec('COMMIT'); return result; }
-    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+
+  read(key) {
+    this.#check(key);
+    const row = this.q.get.get(key);
+    return row ? { key, version: row.version, state: JSON.parse(row.state) } : { key, version: 0, state: this.initial(key) };
   }
-  change(scope, id, status, deleted = false) {
-    this.ensure(scope);
-    if (!id || (!deleted && !['PENDING','PAID','SHIPPED'].includes(status))) {
-      throw new SyncError('Pedido/status inválido', 'BAD_USER_INPUT');
-    }
-    return this.transaction(() => {
-      const current = this.db.prepare('SELECT * FROM orders WHERE scope=? AND id=?').get(scope,id);
-      const version = (current?.version ?? 0) + 1;
-      const seq = this.db.prepare('SELECT head FROM scopes WHERE id=?').get(scope).head + 1;
-      const order = { id, version, status: status ?? current?.status ?? 'PENDING' };
-      const event = { scopeId: scope, cursor: String(seq), operation: deleted ? 'DELETE' : 'UPSERT', order };
-      this.db.prepare(`INSERT INTO orders(scope,id,version,status,deleted) VALUES (?,?,?,?,?)
-        ON CONFLICT(scope,id) DO UPDATE SET version=excluded.version,status=excluded.status,deleted=excluded.deleted`)
-        .run(scope,id,version,order.status,Number(deleted));
-      this.db.prepare('INSERT INTO events VALUES (?,?,?)').run(scope,seq,JSON.stringify(event));
-      this.db.prepare('UPDATE scopes SET head=? WHERE id=?').run(seq,scope);
-      return event;
-    }, true);
+
+  version(key) { return this.read(key).version; }
+
+  // mutate recebe uma cópia do estado e a altera. Versão + estado na mesma
+  // transação; o patch (valores finais) é calculado aqui e publicado após o COMMIT.
+  update(key, mutate) {
+    this.#check(key);
+    this.db.exec('BEGIN IMMEDIATE');
+    let change;
+    try {
+      const current = this.read(key);
+      const next = structuredClone(current.state);
+      mutate(next);
+      const patch = diff(current.state, next);
+      if (!patch.length) { this.db.exec('COMMIT'); return null; } // nada mudou: sem nova versão
+      const version = current.version + 1;
+      this.q.put.run(key, version, JSON.stringify(next));
+      this.db.exec('COMMIT');
+      change = { key, version, state: next, patch, committedAt: this.clock() };
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    this.onCommit(change);
+    return change;
   }
-  snapshot(scope) {
-    this.ensure(scope);
-    return this.transaction(() => ({
-      scopeId: scope,
-      cursor: String(this.db.prepare('SELECT head FROM scopes WHERE id=?').get(scope).head),
-      orders: this.db.prepare('SELECT id,version,status FROM orders WHERE scope=? AND deleted=0 ORDER BY id').all(scope)
-    }));
-  }
-  changes(scope, after, through, first = 100) {
-    this.ensure(scope);
-    return this.transaction(() => {
-      const { head, floor } = this.db.prepare('SELECT head,floor FROM scopes WHERE id=?').get(scope);
-      const a = Number(after), h = Number(through);
-      if (![a,h].every(Number.isSafeInteger) || a < 0 || h < a || h > head || first < 1 || first > 500) {
-        throw new SyncError('Intervalo/cursor inválido', 'BAD_USER_INPUT');
-      }
-      if (a < floor) throw new SyncError('Histórico expirado; obtenha um snapshot fresh', 'CURSOR_EXPIRED');
-      const events = this.db.prepare('SELECT payload FROM events WHERE scope=? AND seq>? AND seq<=? ORDER BY seq LIMIT ?')
-        .all(scope,a,h,first).map(row => JSON.parse(row.payload));
-      const next = events.length ? Number(events.at(-1).cursor) : a;
-      return { events, nextCursor: String(next), hasMore: next < h, through: String(h) };
-    });
-  }
-  prune(scope, through) {
-    this.ensure(scope);
-    this.transaction(() => {
-      const head = this.db.prepare('SELECT head FROM scopes WHERE id=?').get(scope).head;
-      if (!Number.isSafeInteger(through) || through < 0 || through > head) throw new Error('Invalid prune');
-      this.db.prepare('DELETE FROM events WHERE scope=? AND seq<=?').run(scope,through);
-      this.db.prepare('UPDATE scopes SET floor=MAX(floor,?) WHERE id=?').run(through,scope);
-    }, true);
-  }
+
   close() { this.db.close(); }
 }
 
-// Cache do objeto inteiro: dados e cursor nunca são obtidos separadamente.
+// Cache interno do subgraph. Serve qualquer snapshot com versão >= minVersion e
+// só lê o banco quando o que tem é antigo demais. Nunca devolve versão < minVersion.
 export class SnapshotCache {
-  constructor(store, ttlMs = 120_000, clock = Date.now) {
-    this.store = store; this.ttlMs = ttlMs; this.clock = clock; this.entries = new Map();
+  constructor(store, ttlMs = 1000, clock = Date.now) {
+    this.store = store; this.ttlMs = ttlMs; this.clock = clock; this.entries = new Map(); this.reads = 0;
   }
-  get(scope, fresh = false) {
-    const entry = this.entries.get(scope);
-    if (!fresh && entry && entry.expires > this.clock()) return structuredClone(entry.value);
-    const value = this.store.snapshot(scope);
-    this.entries.set(scope,{ value, expires: this.clock() + this.ttlMs });
+  get(key, minVersion = 0) {
+    const entry = this.entries.get(key);
+    if (entry && entry.expires > this.clock() && entry.value.version >= minVersion) return structuredClone(entry.value);
+    this.reads++;
+    const value = this.store.read(key);
+    if (value.version < minVersion) throw new SyncError(`Versão ${minVersion} ainda não disponível (atual ${value.version})`, 'NOT_YET');
+    this.entries.set(key, { value, expires: this.clock() + this.ttlMs });
     return structuredClone(value);
   }
 }

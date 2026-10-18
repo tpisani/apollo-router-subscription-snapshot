@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ciclo de vida da partida</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: mesma família das outras páginas de cenários (guia de protocolo ao vivo).
+   Uma linha do tempo da partida no topo; um simulador que aplica as mesmas regras do
+   código; o gráfico do TTL perto do início; riscos do cache; cenários testados. */
+:root {
+  --bg: #f3f6f4; --surface: #ffffff; --ink: #16211c; --muted: #53635b; --line: #d2dcd6; --soft: #e8eeea;
+  --score: #1f50b8; --score-bg: #e5ecfa;
+  --query: #6d36a8; --query-bg: #f0e8f9;
+  --db: #1b6e4a; --db-bg: #ddf1e6;
+  --hit: #7a5a00; --hit-bg: #fbf0c8;
+  --warn: #ad321b; --warn-bg: #fae5df;
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d1311; --surface: #141c19; --ink: #e2e9e5; --muted: #97a69e; --line: #29362f; --soft: #1b2521;
+  --score: #88a9ff; --score-bg: #1a2540; --query: #caa3f2; --query-bg: #2a1d3b;
+  --db: #6ccf9f; --db-bg: #12301f; --hit: #f0cf6a; --hit-bg: #3a3112; --warn: #ff8f78; --warn-bg: #3b1a14;
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0d1311; --surface: #141c19; --ink: #e2e9e5; --muted: #97a69e; --line: #29362f; --soft: #1b2521;
+  --score: #88a9ff; --score-bg: #1a2540; --query: #caa3f2; --query-bg: #2a1d3b;
+  --db: #6ccf9f; --db-bg: #12301f; --hit: #f0cf6a; --hit-bg: #3a3112; --warn: #ff8f78; --warn-bg: #3b1a14;
+  color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--f-body); }
+.wrap { max-width: 1080px; margin: 0 auto; padding-block: 28px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 40px; }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 600; text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(28px, 4vw, 38px); }
+h2 { font-size: 24px; }
+h3 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+p { margin: 0; max-width: 70ch; }
+code, .mono { font-family: var(--f-mono); font-size: 12.5px; }
+section { display: grid; gap: 14px; min-width: 0; }
+.lede { color: var(--muted); font-size: 16px; }
+header.top { display: grid; gap: 10px; }
+
+/* As três regras */
+.rules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.rule { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 4px; }
+.rule b { font: 600 17px var(--f-display); }
+.rule span { color: var(--muted); font-size: 14px; }
+@media (max-width: 760px) { .rules { grid-template-columns: 1fr; } }
+
+/* Linha do tempo */
+.timeline { display: grid; grid-template-columns: 2.2fr 1fr 2.2fr 1.6fr; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg { padding: 12px 14px; display: grid; gap: 4px; align-content: start; border-right: 1px solid var(--line); min-width: 0; }
+.seg:last-child { border-right: 0; }
+.seg .when { font: 500 12px var(--f-mono); color: var(--muted); }
+.seg .what { font: 600 15px var(--f-display); }
+.seg .how { font-size: 13px; color: var(--muted); }
+.seg.q { background: var(--query-bg); } .seg.q .what { color: var(--query); }
+.seg.s { background: var(--score-bg); } .seg.s .what { color: var(--score); }
+.seg.f { background: var(--db-bg); } .seg.f .what { color: var(--db); }
+@media (max-width: 760px) { .timeline { grid-template-columns: 1fr; } .seg { border-right: 0; border-bottom: 1px solid var(--line); } .seg:last-child { border-bottom: 0; } }
+
+/* Simulador */
+.sim { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: grid; gap: 18px; }
+.controls { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 760px) { .controls { grid-template-columns: 1fr; } }
+.field { display: grid; gap: 6px; min-width: 0; }
+.field label, .field .label { font: 500 12px var(--f-body); letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+input[type="range"] { width: 100%; accent-color: var(--score); }
+.tval { font: 600 20px var(--f-display); font-variant-numeric: tabular-nums; }
+.seg-ctl { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg-ctl button { font: 500 12.5px var(--f-mono); border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 6px; padding: 6px 9px; cursor: pointer; }
+.seg-ctl button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--score); outline-offset: 2px; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.presets .label { margin-right: 4px; }
+.presets button { font: 500 13px var(--f-body); border: 1px solid var(--line); background: var(--soft); color: var(--ink); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+.presets button:hover { border-color: var(--muted); }
+
+.result { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 18px; }
+@media (max-width: 760px) { .result { grid-template-columns: 1fr; } }
+.facts { display: grid; gap: 10px; align-content: start; }
+.fact { display: grid; grid-template-columns: 9.5em minmax(0, 1fr); gap: 10px; align-items: baseline; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.fact .k { color: var(--muted); font-size: 13px; }
+.fact .v { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.pill { display: inline-block; font: 600 13px var(--f-display); letter-spacing: .03em; padding: 3px 10px; border-radius: 999px; }
+.pill.before { background: var(--query-bg); color: var(--query); }
+.pill.live { background: var(--score-bg); color: var(--score); }
+.pill.over { background: var(--db-bg); color: var(--db); }
+.steps { margin: 0; padding-left: 1.3em; display: grid; gap: 8px; }
+.steps li { padding-left: 4px; }
+.note { border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+.note.warn { background: var(--warn-bg); color: var(--ink); border: 1px solid var(--warn); }
+.note.ok { background: var(--db-bg); }
+
+/* Gráfico */
+.chart-box { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 14px 8px; position: relative; overflow-x: auto; }
+.chart-box svg { display: block; width: 100%; min-width: 520px; height: auto; }
+.chart-box text { font: 11px var(--f-mono); fill: var(--muted); }
+.chart-box .grid { stroke: var(--line); stroke-width: 1; }
+.chart-box .axis { stroke: var(--muted); stroke-width: 1; }
+.chart-box .series { fill: none; stroke: var(--query); stroke-width: 2; stroke-linejoin: round; }
+.chart-box .area { fill: var(--query-bg); stroke: none; }
+.chart-box .window { fill: var(--score-bg); stroke: none; }
+.chart-box .mark { fill: var(--query); stroke: var(--surface); stroke-width: 2; }
+.chart-box .now { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-box .lbl { fill: var(--ink); font-weight: 500; }
+.tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--bg); font: 12px var(--f-mono); padding: 5px 8px; border-radius: 5px; white-space: nowrap; transform: translate(-50%, -120%); }
+.caption { color: var(--muted); font-size: 13px; }
+
+/* Tabelas e cartões */
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 14px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 500 12px var(--f-body); letter-spacing: .05em; text-transform: uppercase; color: var(--muted); background: var(--soft); }
+tr:last-child td { border-bottom: 0; }
+td code { white-space: nowrap; }
+.sev { font: 600 12px var(--f-display); letter-spacing: .03em; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.sev.none { background: var(--db-bg); color: var(--db); }
+.sev.low { background: var(--hit-bg); color: var(--hit); }
+.sev.high { background: var(--warn-bg); color: var(--warn); }
+
+.cases { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 760px) { .cases { grid-template-columns: 1fr; } }
+.case { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 8px; align-content: start; }
+.case h4 { margin: 0; font: 600 16px var(--f-display); }
+.case p { font-size: 14px; color: var(--muted); }
+.case .out { font: 500 12.5px var(--f-mono); color: var(--ink); background: var(--soft); border-radius: 6px; padding: 7px 9px; }
+.case .where { font: 12px var(--f-mono); color: var(--muted); }
+ul.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; max-width: 75ch; }
+@media (prefers-reduced-motion: no-preference) { .pill, .note { transition: background-color .15s, color .15s; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h3>Placar e estatísticas ao vivo · ciclo de vida</h3>
+  <h1>Ciclo de vida da partida</h1>
+  <p class="lede">Quando a tela de uma partida usa só a query, quando abre a subscription e quando para. E por que um status antigo no cache não faz ninguém perder o início do jogo.</p>
+</header>
+
+<section aria-labelledby="regras">
+  <h2 id="regras">Três regras</h2>
+  <div class="rules">
+    <div class="rule"><b>O horário decide quando começar</b><span>A partir de <code>kickoff − 15 min</code> o cliente assina, seja qual for o status que a query devolveu.</span></div>
+    <div class="rule"><b>O status decide quando parar</b><span>No frame <code>FULL_TIME</code> o subgraph encerra o stream e o cliente fecha os dois canais.</span></div>
+    <div class="rule"><b>O cache não passa da janela</b><span>A resposta com <code>SCHEDULED</code> expira até <code>kickoff − 15 min</code>; nenhum cache serve “não começou” depois disso.</span></div>
+  </div>
+</section>
+
+<section aria-labelledby="linha">
+  <h2 id="linha">A partida no tempo</h2>
+  <div class="timeline" role="list">
+    <div class="seg q" role="listitem"><span class="when">até kickoff − 15 min</span><span class="what">Só a query</span><span class="how">Status <code>SCHEDULED</code>. Cache de até 5 min, encurtando perto da janela.</span></div>
+    <div class="seg s" role="listitem"><span class="when">kickoff − 15 min → apito</span><span class="what">Subscription</span><span class="how">Escalação, aquecimento, atraso. Frames de <code>SCHEDULED</code>.</span></div>
+    <div class="seg s" role="listitem"><span class="when">apito → fim</span><span class="what">Subscription</span><span class="how"><code>LIVE</code> e <code>HALF_TIME</code>. Cache de 2 s na query.</span></div>
+    <div class="seg f" role="listitem"><span class="when">depois do FULL_TIME</span><span class="what">Só a query</span><span class="how">Estado final. Stream encerrado. Cache de 1 h.</span></div>
+  </div>
+</section>
+
+<section aria-labelledby="simulador">
+  <h2 id="simulador">Simulador</h2>
+  <p>Escolha o instante e os dois status: o que está no banco e o que a query do cliente devolveu (que pode vir antiga do cache). As regras são as mesmas de <code>src/sports.mjs</code>, com a janela de 15 min.</p>
+  <div class="sim">
+    <div class="presets"><span class="label">Cenários</span>
+      <button type="button" data-preset="longe">Longe do início</button>
+      <button type="button" data-preset="perto">Perto da janela</button>
+      <button type="button" data-preset="janela">Cache antigo na janela</button>
+      <button type="button" data-preset="atraso">Jogo atrasado</button>
+      <button type="button" data-preset="aovivo">Ao vivo</button>
+      <button type="button" data-preset="liveantigo">Cache antigo de LIVE</button>
+      <button type="button" data-preset="fim">Encerrada</button>
+    </div>
+    <div class="controls">
+      <div class="field">
+        <label for="t">Agora, em relação ao início</label>
+        <span class="tval" id="tlabel">−60 min</span>
+        <input id="t" type="range" min="-180" max="150" step="1" value="-60" aria-describedby="tlabel">
+      </div>
+      <div class="field"><span class="label" id="dbl">Status no banco</span><div class="seg-ctl" id="db" role="group" aria-labelledby="dbl"></div></div>
+      <div class="field"><span class="label" id="cql">A query devolveu</span><div class="seg-ctl" id="cq" role="group" aria-labelledby="cql"></div></div>
+    </div>
+    <div class="result">
+      <div class="facts">
+        <div class="fact"><span class="k">Fase do cliente</span><span class="v" id="phase"></span></div>
+        <div class="fact"><span class="k">Cache-Control que o subgraph mandaria agora</span><span class="v mono" id="cc"></span></div>
+        <div class="fact"><span class="k">Essa resposta expira</span><span class="v" id="exp"></span></div>
+        <div class="fact"><span class="k">Subscriptions abertas</span><span class="v" id="subs"></span></div>
+      </div>
+      <div class="facts">
+        <h3>O que acontece</h3>
+        <ol class="steps" id="steps"></ol>
+        <div id="callout"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="ttl">
+  <h2 id="ttl">O cache do SCHEDULED encolhe até a janela</h2>
+  <p>Longe do início a resposta pode ficar 5 min em cache. Nos últimos 5 min antes da janela, o <code>max-age</code> é o tempo que falta até ela; a menos de 1 s, <code>no-store</code>. Na janela volta a 2 s, como ao vivo. Passe o mouse ou o dedo no gráfico.</p>
+  <div class="chart-box" id="chartbox">
+    <svg id="chart" viewBox="0 0 720 260" role="img" aria-label="max-age da resposta SCHEDULED, em segundos, de 40 minutos antes do início até 5 minutos depois: 300 até 20 minutos antes, depois cai em linha reta até 0 aos 15 minutos antes, e 2 segundos dentro da janela."></svg>
+    <div class="tip" id="tip" hidden></div>
+  </div>
+  <p class="caption">Garantia, testada em <code>tests/lifecycle.test.mjs</code> para qualquer instante antes da janela: agora + max-age ≤ kickoff − 15 min.</p>
+</section>
+
+<section aria-labelledby="risco">
+  <h2 id="risco">O que um status antigo pode causar</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>A query devolveu</th><th>O que pode estar errado</th><th>Consequência</th><th>Risco</th></tr></thead>
+    <tbody>
+      <tr><td><code>FULL_TIME</code></td><td>Nada. É o estado final e não volta atrás.</td><td>Cache longo (1 h) é seguro.</td><td><span class="sev none">nenhum</span></td></tr>
+      <tr><td><code>LIVE</code> / <code>HALF_TIME</code></td><td>A partida já terminou.</td><td>O cliente abre a subscription, o primeiro frame traz <code>FULL_TIME</code> e o stream fecha em seguida. Medido: menos de 1 s, sem reconexão.</td><td><span class="sev low">inofensivo</span></td></tr>
+      <tr><td><code>SCHEDULED</code> na janela</td><td>A partida já começou.</td><td>Nenhuma: o horário manda assinar, e o primeiro frame traz o status real.</td><td><span class="sev none">nenhum</span></td></tr>
+      <tr><td><code>SCHEDULED</code> antes da janela</td><td>A partida começou antes da janela (antecipada sem remarcar).</td><td>O cliente só assina na hora da janela. É o único caso não coberto; remarcar com <code>scheduleMatch</code> evita.</td><td><span class="sev high">fora da regra</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section aria-labelledby="cenarios">
+  <h2 id="cenarios">Cenários testados</h2>
+  <p>Pelo emulador com o cache de queries no pior caso (nunca expira) e janela de 1 s, e no pipeline do Apollo Router com o plugin de retenção.</p>
+  <div class="cases">
+    <div class="case"><h4>Partida encerrada</h4><p>A query devolve <code>FULL_TIME</code>. O cliente mostra o estado final e não assina.</p><div class="out">1 query por canal · 0 subscriptions · nenhum stream no subgraph</div><div class="where">tests/lifecycle.test.mjs</div></div>
+    <div class="case"><h4>Agendada, com SCHEDULED antigo no cache</h4><p>O cache nunca expira e continua dizendo <code>SCHEDULED</code>. O cliente espera a janela pelo relógio e assina mesmo assim.</p><div class="out">0 streams antes da janela · assinou &lt; 500 ms depois dela · cache seguia antigo</div><div class="where">tests/lifecycle.test.mjs</div></div>
+    <div class="case"><h4>Jogo atrasado</h4><p>Passou do horário e ainda está <code>SCHEDULED</code>. O cliente continua assinando, recebe os frames periódicos e o apito chega pelo stream.</p><div class="out">fase live o tempo todo · LIVE e gol recebidos · FULL_TIME fecha os dois canais</div><div class="where">tests/lifecycle.test.mjs</div></div>
+    <div class="case"><h4>Cache antigo dizendo LIVE</h4><p>A partida terminou depois que o cache guardou <code>LIVE</code>. O cliente assina; o primeiro frame é <code>FULL_TIME</code>.</p><div class="out">fases live → over · fechou em &lt; 1 s · 0 reconexões · tudo fechado</div><div class="where">tests/lifecycle.test.mjs</div></div>
+    <div class="case"><h4>Fim com clientes deduplicados</h4><p>Cinco clientes num único upstream. O <code>FULL_TIME</code> termina o stream no subgraph e todos param juntos.</p><div class="out">1 upstream para 5 · todos em over · upstreams fechados</div><div class="where">tests/lifecycle.test.mjs</div></div>
+    <div class="case"><h4>Fim no Apollo Router com o plugin</h4><p>O Router fecha o multipart dos dois clientes. Quem chega depois recebe o estado final do subgraph, não um frame retido do upstream que já fechou.</p><div class="out">os dois streams terminam · retenção limpa · novo cliente: FULL_TIME e fim</div><div class="where">router-plugin/src/harness.rs</div></div>
+  </div>
+  <p class="caption">O último teste achou um problema no plugin: a entrada retida só era liberada quando o cliente era descartado, não quando o stream terminava. Agora ela sai no item final do stream.</p>
+</section>
+
+<section aria-labelledby="limites">
+  <h2 id="limites">Limites</h2>
+  <ul class="plain">
+    <li><b>Jogo antecipado sem remarcação:</b> se a partida começa antes de <code>kickoff − 15 min</code> e ninguém chama <code>scheduleMatch</code>, quem está antes da janela só assina na hora dela.</li>
+    <li><b>Remarcação:</b> <code>scheduleMatch</code> muda o <code>kickoff</code> numa nova versão do placar, então quem assina recebe o horário novo. Quem só fez a query pode ter o antigo por até 5 min; o catálogo tem cache próprio.</li>
+    <li><b>Correção depois do fim</b> (gol anulado na revisão): o <code>FULL_TIME</code> fica em cache por até 1 h, a menos que se invalide o cache nesse evento.</li>
+    <li><b>Estatísticas:</b> o subgraph de estatísticas não conhece o status, então a query delas mantém o cache de 5 s. Quem decide abrir e fechar o canal de estatísticas é o cliente, pelo placar.</li>
+  </ul>
+</section>
+
+<section aria-labelledby="codigo">
+  <h2 id="codigo">Onde está</h2>
+  <ul class="plain">
+    <li><code>src/sports.mjs</code>: <code>matchPhase</code> (fase pela hora e pelo status) e <code>scoreboardMaxAge</code> (Cache-Control por status), usados pelo subgraph e pelo cliente.</li>
+    <li><code>src/app.mjs</code>: o placar encerra o stream depois do frame <code>FULL_TIME</code>; mutation <code>scheduleMatch</code>.</li>
+    <li><code>client/lifecycle.mjs</code>: <code>watchMatch</code>, a tela de uma partida (query, espera, subscription, fim).</li>
+    <li><code>router-plugin/src/retain.rs</code>: a retenção libera a entrada no fim do stream.</li>
+  </ul>
+</section>
+
+</div>
+<script>
+(() => {
+  const LEAD = 15, SCHEDULED_TTL = 300, LIVE_TTL = 2, FINAL_TTL = 3600;
+  const STATUSES = ['SCHEDULED', 'LIVE', 'HALF_TIME', 'FULL_TIME'];
+  // As mesmas regras de src/sports.mjs, em minutos relativos ao início.
+  const phaseOf = (status, t) => {
+    if (status === 'FULL_TIME') return { phase: 'over' };
+    if (status !== 'SCHEDULED') return { phase: 'live' };
+    return t < -LEAD ? { phase: 'before', subscribeAt: -LEAD } : { phase: 'live' };
+  };
+  const maxAge = (status, t) => {
+    const p = phaseOf(status, t);
+    if (p.phase === 'over') return FINAL_TTL;
+    if (p.phase === 'before') return Math.min(SCHEDULED_TTL, Math.floor((p.subscribeAt - t) * 60));
+    return LIVE_TTL;
+  };
+  const fmt = m => { const s = m < 0 ? '−' : m > 0 ? '+' : ''; const a = Math.abs(m); return a >= 60 ? `${s}${Math.floor(a / 60)} h ${String(Math.round(a % 60)).padStart(2, '0')} min` : `${s}${Math.round(a)} min`; };
+  const dur = s => s >= 60 ? `${Math.round(s / 60)} min` : `${s} s`;
+
+  const state = { t: -60, db: 'SCHEDULED', cq: 'SCHEDULED' };
+  const $ = id => document.getElementById(id);
+  const buttons = (el, key) => {
+    STATUSES.forEach(s => {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = s; b.dataset.v = s;
+      b.addEventListener('click', () => { state[key] = s; render(); });
+      el.appendChild(b);
+    });
+  };
+  buttons($('db'), 'db'); buttons($('cq'), 'cq');
+  $('t').addEventListener('input', e => { state.t = Number(e.target.value); render(); });
+
+  const presets = {
+    longe: { t: -120, db: 'SCHEDULED', cq: 'SCHEDULED' },
+    perto: { t: -18, db: 'SCHEDULED', cq: 'SCHEDULED' },
+    janela: { t: -5, db: 'LIVE', cq: 'SCHEDULED' },
+    atraso: { t: 12, db: 'SCHEDULED', cq: 'SCHEDULED' },
+    aovivo: { t: 40, db: 'LIVE', cq: 'LIVE' },
+    liveantigo: { t: 110, db: 'FULL_TIME', cq: 'LIVE' },
+    fim: { t: 130, db: 'FULL_TIME', cq: 'FULL_TIME' }
+  };
+  document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => { Object.assign(state, presets[b.dataset.preset]); render(); }));
+
+  function render() {
+    $('t').value = state.t; $('tlabel').textContent = state.t === 0 ? 'no horário de início' : `${fmt(state.t)} do início`;
+    for (const [id, key] of [['db', 'db'], ['cq', 'cq']]) $(id).querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === state[key])));
+
+    const decision = phaseOf(state.cq, state.t);
+    const labels = { before: 'só a query', live: 'subscription', over: 'encerrada' };
+    $('phase').innerHTML = `<span class="pill ${decision.phase}">${labels[decision.phase]}</span>`;
+    const age = maxAge(state.db, state.t);
+    $('cc').textContent = age > 0 ? `public, max-age=${age}` : 'no-store';
+    $('exp').textContent = age > 0 ? (state.db === 'SCHEDULED' && state.t < -LEAD ? `em ${dur(age)}, até ${fmt(state.t + age / 60)} do início` : `em ${dur(age)}`) : 'não vai para o cache';
+
+    const steps = []; let callout = '';
+    steps.push(`A query do placar devolve <code>${state.cq}</code>${state.cq !== state.db ? ' (antigo, do cache)' : ''}.`);
+    if (decision.phase === 'over') {
+      steps.push('O cliente mostra o estado final e não abre nenhuma subscription.');
+      $('subs').textContent = '0';
+      callout = '<div class="note ok">FULL_TIME é final: mesmo vindo do cache, está certo.</div>';
+    } else if (decision.phase === 'before') {
+      steps.push(`Só a query. O cliente agenda a subscription para ${fmt(-LEAD)} do início, pelo relógio.`);
+      steps.push('Na hora da janela assina, sem consultar o status de novo.');
+      $('subs').textContent = '0 agora';
+      if (state.db !== 'SCHEDULED') callout = '<div class="note warn">A partida já começou antes da janela: este é o caso não coberto. O cliente só assina na hora da janela. Remarcar com scheduleMatch evita.</div>';
+    } else {
+      steps.push('O horário (ou o status) manda assinar: placar e estatísticas.');
+      if (state.db === 'FULL_TIME') {
+        steps.push('O primeiro frame traz <code>FULL_TIME</code>; o subgraph encerra o stream.');
+        steps.push('O cliente fecha as estatísticas também e não reconecta.');
+        $('subs').textContent = '2, por menos de 1 s';
+        callout = '<div class="note ok">O LIVE do cache estava antigo, e isso custou só uma subscription curta.</div>';
+      } else {
+        steps.push(`O primeiro frame traz o estado real: <code>${state.db}</code>.`);
+        steps.push(state.db === 'SCHEDULED' ? (state.t >= 0 ? 'Jogo atrasado: o cliente segue assinando e o apito chega pelo stream.' : 'Escalação e apito chegam pelo stream.') : 'Cada mudança chega pelo stream, até o FULL_TIME.');
+        $('subs').textContent = '2 (placar e estatísticas)';
+        if (state.cq !== state.db) callout = '<div class="note ok">O status do cache estava antigo e não fez diferença: o horário decidiu assinar.</div>';
+      }
+    }
+    $('steps').innerHTML = steps.map(s => `<li>${s}</li>`).join('');
+    $('callout').innerHTML = callout;
+    drawMarker();
+  }
+
+  // Gráfico: max-age (s) de uma resposta SCHEDULED entre −40 e +5 min do início.
+  const svg = $('chart'), NS = 'http://www.w3.org/2000/svg';
+  const W = 720, H = 260, L = 52, R = 16, T = 18, B = 40, X0 = -40, X1 = 5, Y1 = 300;
+  const x = m => L + (m - X0) / (X1 - X0) * (W - L - R);
+  const y = s => T + (1 - s / Y1) * (H - T - B);
+  const el = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; svg.appendChild(e); return e; };
+  el('rect', { class: 'window', x: x(-LEAD), y: T, width: x(X1) - x(-LEAD), height: H - T - B });
+  for (const s of [0, 100, 200, 300]) { el('line', { class: 'grid', x1: L, x2: W - R, y1: y(s), y2: y(s) }); el('text', { x: L - 8, y: y(s) + 4, 'text-anchor': 'end' }, `${s}s`); }
+  for (const m of [-40, -30, -20, -15, -10, 0, 5]) el('text', { x: x(m), y: H - B + 18, 'text-anchor': 'middle' }, m === 0 ? 'início' : `${m > 0 ? '+' : '−'}${Math.abs(m)}`);
+  el('text', { x: (L + W - R) / 2, y: H - 6, 'text-anchor': 'middle' }, 'minutos em relação ao início');
+  el('line', { class: 'axis', x1: L, x2: W - R, y1: y(0), y2: y(0) });
+  const pts = []; for (let m = X0; m <= X1; m += 0.25) pts.push([m, maxAge('SCHEDULED', m)]);
+  const path = pts.map(([m, s], i) => `${i ? 'L' : 'M'}${x(m).toFixed(1)},${y(s).toFixed(1)}`).join('');
+  el('path', { class: 'area', d: `${path}L${x(X1)},${y(0)}L${x(X0)},${y(0)}Z` });
+  el('path', { class: 'series', d: path });
+  el('text', { class: 'lbl', x: x(-30), y: y(300) - 6, 'text-anchor': 'middle' }, 'até 5 min');
+  el('text', { class: 'lbl', x: x(-LEAD) + 6, y: T + 14 }, 'janela: subscription');
+  const marker = el('circle', { class: 'mark', r: 5, cx: -99, cy: -99 });
+  const nowLine = el('line', { class: 'now', x1: -99, x2: -99, y1: T, y2: H - B });
+  function drawMarker() {
+    const inRange = state.t >= X0 && state.t <= X1;
+    const t = Math.min(X1, Math.max(X0, state.t));
+    marker.setAttribute('cx', inRange ? x(t) : -99); marker.setAttribute('cy', inRange ? y(maxAge('SCHEDULED', t)) : -99);
+    nowLine.setAttribute('x1', inRange ? x(t) : -99); nowLine.setAttribute('x2', inRange ? x(t) : -99);
+  }
+  const box = $('chartbox'), tip = $('tip');
+  const hover = evt => {
+    const r = svg.getBoundingClientRect(); const p = evt.touches ? evt.touches[0] : evt;
+    const vx = (p.clientX - r.left) / r.width * W; const m = X0 + (vx - L) / (W - L - R) * (X1 - X0);
+    if (m < X0 || m > X1) { tip.hidden = true; return; }
+    const s = maxAge('SCHEDULED', m);
+    tip.hidden = false; tip.textContent = `${fmt(Math.round(m))}: ${s > 0 ? `max-age=${s}` : 'no-store'}`;
+    const br = box.getBoundingClientRect();
+    tip.style.left = `${p.clientX - br.left + box.scrollLeft}px`; tip.style.top = `${(y(s) / H) * r.height + (r.top - br.top)}px`;
+  };
+  svg.addEventListener('pointermove', hover); svg.addEventListener('pointerleave', () => { tip.hidden = true; });
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,66 +1,95 @@
-export class Synchronizer {
-  constructor(api, scopeId) { this.api = api; this.scopeId = scopeId; this.orders = new Map(); this.cursor = 0; }
+// Estado + versão de um canal de uma partida. Os dois canais (placar e
+// estatísticas) mandam frames STATE com o estado inteiro, então a regra é uma só:
+// fica o de maior versão. Não há lacuna a recuperar: perda, duplicata, reconexão
+// e late joiner se resolvem com o próximo frame, retido pelo edge/Router ou periódico.
+// A base (minVersion 0, provavelmente do cache) só serve para desenhar a tela antes
+// do primeiro frame. synced = já recebeu um frame nesta conexão.
+//   fromWire: converte o formato da API (ex.: jogadores em lista → mapa por id).
+export class StateSync {
+  constructor({ matchId, api, fromWire = state => state }) {
+    this.matchId = matchId; this.api = api; this.fromWire = fromWire;
+    this.state = null; this.version = null; this.synced = false; this.base = null; this.busy = false;
+    this.stats = { snapshots: 0, frames: 0, applied: 0, ignored: 0, stale: 0 };
+  }
   initialize(snapshot) {
-    if (snapshot.scopeId !== this.scopeId) throw new Error('Snapshot de outro escopo');
-    this.orders = new Map(snapshot.orders.map(order => [order.id,{...order}]));
-    this.cursor = Number(snapshot.cursor);
+    if (snapshot.matchId !== this.matchId) throw new Error('Snapshot de outra partida');
+    if (this.version !== null && snapshot.version <= this.version) return;
+    this.state = this.fromWire(structuredClone(snapshot.state)); this.version = snapshot.version; this.stats.snapshots++;
   }
-  apply(change) {
-    if (change.scopeId !== this.scopeId) throw new Error('Evento de outro escopo');
-    const seq = Number(change.cursor);
-    if (seq <= this.cursor) return; // Reentrega/overlap do replay com live.
-    // Neste demo, a sequência é contígua POR ESCOPO e não há filtros adicionais.
-    if (seq !== this.cursor + 1) throw new Error(`Lacuna: ${this.cursor} -> ${seq}`);
-    if (change.operation === 'DELETE') this.orders.delete(change.order.id);
-    else this.orders.set(change.order.id,{...change.order});
-    this.cursor = seq;
-  }
-  async catchUp(target) {
-    let h = Number(target);
-    try {
-      while (this.cursor < h) {
-        const page = await this.api.changes(String(this.cursor),String(h));
-        if (!page.events.length) throw new Error('Histórico incompleto; cursor não avançou');
-        for (const event of page.events) this.apply(event);
-        if (Number(page.nextCursor) !== this.cursor) throw new Error('Página inconsistente');
-      }
-    } catch (error) {
-      if (error.code !== 'CURSOR_EXPIRED') throw error;
-      // fresh=true tem chave diferente no Router e ignora o cache interno.
-      this.initialize(await this.api.snapshot(true));
-      h = Number(await this.api.head());
-      await this.catchUp(h);
-    }
+  startBase() {
+    this.base ??= this.api.snapshot(0).catch(error => { this.base = null; throw error; });
+    return this.base;
   }
   async accept(frame) {
-    if (frame.scopeId !== this.scopeId) throw new Error('Frame de outro escopo');
-    const target = Number(frame.cursor);
-    if (target <= this.cursor) return;
-    if (frame.kind === 'CHANGE' && target === this.cursor + 1) {
-      if (!frame.change || frame.change.cursor !== frame.cursor) throw new Error('Frame inconsistente');
-      this.apply(frame.change);
+    if (frame.matchId !== this.matchId) throw new Error('Frame de outra partida');
+    this.stats.frames++;
+    if (this.version !== null && frame.version <= this.version) {
+      // Mais velho ou igual ao que já tenho: frame retido de outra instância, periódico
+      // atrasado ou duplicata. Nunca regride.
+      this.stats.ignored++; if (frame.version < this.version) this.stats.stale++;
     } else {
-      // Checkpoint detecta perdas; evento fora de ordem provoca recuperação pelo log.
-      await this.catchUp(target);
+      this.state = this.fromWire(structuredClone(frame.state)); this.version = frame.version; this.stats.applied++;
     }
+    this.synced = true;
   }
-  view() { return { cursor: String(this.cursor), orders: [...this.orders.values()].sort((a,b) => a.id.localeCompare(b.id)) }; }
+  view() { return { version: this.version, synced: this.synced, state: this.state }; }
 }
 
-export async function runSession(sync, frames, { resume = false, onUpdate = () => {} } = {}) {
+export const statsFromWire = ({ players, ...teams }) => ({ ...teams, players: Object.fromEntries(players.map(({ id, ...p }) => [id, p])) });
+export const createSync = (channel, options) => new StateSync({ ...options, fromWire: channel === 'stats' ? statsFromWire : undefined });
+// O placar no FULL_TIME é final: o subgraph encerra o stream e o cliente não reconecta.
+export const isFinalScoreboard = state => state?.status === 'FULL_TIME';
+
+// Uma conexão do stream; frames processados em ordem. Devolve 'final' quando o
+// estado é final (isFinal); senão o fim do stream é falha e o chamador reconecta.
+export async function runSession(sync, frames, { onUpdate = () => {}, isFinal = () => false } = {}) {
+  sync.synced = false;
   const iterator = frames[Symbol.asyncIterator]();
+  if (sync.version === null) {
+    // Render provisório: a base pode chegar antes do primeiro frame.
+    sync.startBase().then(snapshot => {
+      if (sync.version === null) { sync.initialize(snapshot); onUpdate(sync.view()); }
+    }, () => {});
+  }
   try {
-    const first = await iterator.next();
-    if (first.done) throw new Error('Subscription terminou antes do primeiro frame');
-    // Um frame recebido confirma participação no fluxo compartilhado. O transporte
-    // preserva os frames seguintes enquanto as queries de bootstrap executam.
-    if (!resume) sync.initialize(await sync.api.snapshot(false));
-    await sync.catchUp(await sync.api.head());
-    await sync.accept(first.value); onUpdate(sync.view());
     while (true) {
       const next = await iterator.next();
-      if (next.done) throw new Error('Subscription encerrada; reconectar e recuperar');
-      await sync.accept(next.value); onUpdate(sync.view());
+      if (next.done) {
+        if (isFinal(sync.state)) return 'final';
+        throw new Error('Stream encerrado; reconectar');
+      }
+      await sync.accept(next.value);
+      onUpdate(sync.view());
+      if (isFinal(sync.state)) return 'final';
     }
   } finally { await iterator.return?.(); }
+}
+
+const backoff = attempt => Math.min(10_000, 200 * 2 ** attempt) * (0.5 + Math.random() / 2);
+
+// Reconexão com backoff e watchdog (sem frame em stallMs = conexão morta). O
+// estado é mantido; a retomada é o próximo frame (retido pelo edge/Router ou periódico).
+// Termina quando o estado fica final (isFinal) ou com signal.
+export async function runSync({ sync, connect, signal, stallMs = 5000, onUpdate = () => {}, onError = () => {}, wait = backoff, isFinal = () => false }) {
+  let attempt = 0;
+  while (!signal?.aborted) {
+    const session = new AbortController();
+    const abort = () => session.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    let lastFrame = Date.now();
+    const watchdog = setInterval(() => {
+      if (sync.busy) lastFrame = Date.now();
+      else if (Date.now() - lastFrame > stallMs) session.abort(new Error('Stream parado'));
+    }, Math.min(1000, stallMs / 2));
+    try {
+      const outcome = await runSession(sync, connect(session.signal), { isFinal, onUpdate: view => { lastFrame = Date.now(); attempt = 0; onUpdate(view); } });
+      if (outcome === 'final') break;
+    } catch (error) {
+      if (signal?.aborted) break;
+      onError(session.signal.aborted && session.signal.reason instanceof Error ? session.signal.reason : error, attempt);
+      await new Promise(resolve => setTimeout(resolve, wait(attempt++)));
+    } finally {
+      clearInterval(watchdog); session.abort(); signal?.removeEventListener('abort', abort);
+    }
+  }
 }

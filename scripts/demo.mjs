@@ -1,17 +1,25 @@
-import assert from 'node:assert/strict';
-import { graphql, apiFor } from '../client/transport.mjs';
-const url = process.env.GRAPHQL_URL ?? 'http://localhost:4000/graphql';
-const scope = process.env.SCOPE_ID ?? 'loja-42';
-const api = apiFor(url,scope);
-async function upsert(status) {
-  return graphql(url,'mutation($scope:ID!,$status:String!) { upsertOrder(scopeId:$scope,id:"order-1",status:$status) { cursor } }',{scope,status});
+import { setTimeout as delay } from 'node:timers/promises';
+import { graphql } from '../client/transport.mjs';
+import { playGenerator } from '../src/sports.mjs';
+
+// Simula o provedor de dados pela API (mutations): lances a EVENTS_PER_SECOND e um
+// gol a cada GOAL_EVERY_S segundos. Rode `npm run client` em outro terminal.
+const url = process.env.GRAPHQL_URL ?? 'http://localhost:4010/graphql';
+const matchId = process.env.MATCH_ID ?? 'm1';
+const seconds = Number(process.env.SECONDS ?? 60);
+const perSecond = Number(process.env.EVENTS_PER_SECOND ?? 20);
+const goalEvery = Number(process.env.GOAL_EVERY_S ?? 15);
+const next = playGenerator(matchId, Date.now() % 1000);
+const { scoreboard } = await graphql(url, 'query($m: ID!) { scoreboard(matchId: $m, minVersion: 0) { state { status } } }', { m: matchId });
+if (scoreboard.state.status !== 'LIVE') await graphql(url, 'mutation($m: ID!) { startPeriod(matchId: $m, period: 1) { version } }', { m: matchId });
+const t0 = Date.now();
+for (let tick = 0; Date.now() - t0 < seconds * 1000; tick++) {
+  const events = Array.from({ length: Math.max(1, Math.round(perSecond / 4)) }, next);
+  const version = (await graphql(url, 'mutation($m: ID!, $e: [StatEventInput!]!) { recordStats(matchId: $m, events: $e) }', { m: matchId, e: events })).recordStats;
+  if (tick > 0 && tick % (goalEvery * 4) === 0) {
+    const side = Math.random() < 0.5 ? 'HOME' : 'AWAY';
+    const goal = (await graphql(url, 'mutation($m: ID!, $s: Side!) { scoreGoal(matchId: $m, side: $s) { version state { home away } } }', { m: matchId, s: side })).scoreGoal;
+    console.log(`GOL ${side}: ${goal.state.home} x ${goal.state.away} (placar v${goal.version})`);
+  } else if (tick % 4 === 0) console.log(`estatísticas v${version}`);
+  await delay(250);
 }
-await upsert('PENDING');
-const before = await api.snapshot(false);
-await upsert('PAID');
-const cached = await api.snapshot(false);
-const head = await api.head();
-assert.equal(cached.cursor,before.cursor,'Execute em até 60s para observar o cache');
-assert.ok(Number(head)>Number(cached.cursor));
-console.log(JSON.stringify({ snapshotCacheado:cached,headAtual:head },null,2));
-console.log('O snapshot permanece antigo. O cliente usa histórico para alcançar o head.');

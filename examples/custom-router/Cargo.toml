@@ -1,0 +1,19 @@
+# A custom Apollo Router with the subscription_snapshot plugin, as you would set it
+# up in your own repository. CI builds it against the plugin in this checkout.
+[package]
+name = "custom-router"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "router"
+path = "src/main.rs"
+
+[dependencies]
+# Must be exactly the version the plugin is built against (see the plugin's Cargo.toml).
+apollo-router = "=2.18.0"
+anyhow = "1"
+# In your own repository, depend on the plugin through git, pinned to a commit:
+# subscription_snapshot = { git = "https://github.com/tpisani/apollo-router-subscription-snapshot", rev = "<commit>", package = "apollo-router-subscription-snapshot" }
+subscription_snapshot = { path = "../..", package = "apollo-router-subscription-snapshot" }

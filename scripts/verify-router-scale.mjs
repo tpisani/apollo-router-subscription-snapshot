@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createSync, runSync, statsFromWire } from '../client/sync.mjs';
 import { graphql, snapshotApi, transports } from '../client/transport.mjs';
 import { playGenerator } from '../src/sports.mjs';
+import { watchMatch } from '../client/lifecycle.mjs';
 
 // O plano gratuito do GraphOS limita requisições por instância (503
 // ROUTER_FREE_PLAN_RATE_LIMIT_REACHED); cada subscription conta uma vez.
@@ -29,7 +30,9 @@ const monotonic = list => list.every((v, i) => i === 0 || v >= list[i - 1]);
 //               direto para eles e só as subscriptions passam pelo Router, para
 //               caber no limite de requisições do plano gratuito
 // Roda também contra o emulador (tests/router-scale.test.mjs), com edges no lugar dos routers.
-export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, kill, direct, headers = {}, log = () => {} }) {
+//   lead:       opcional, janela de início (ms) configurada nos subgraphs; liga a etapa
+//               do ciclo de vida (query × subscription, FULL_TIME)
+export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, kill, direct, lead, headers = {}, log = () => {} }) {
   rateLimited = null;
   const run = Math.random().toString(36).slice(2, 7);
   const result = {};
@@ -41,6 +44,8 @@ export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, 
     return {
       startPeriod: async matchId => (await call('mutation($m: ID!) { startPeriod(matchId: $m, period: 1) { version } }', { m: matchId }, 'startPeriod', scores)).version,
       goal: async matchId => (await call('mutation($m: ID!) { scoreGoal(matchId: $m, side: HOME) { version } }', { m: matchId }, 'scoreGoal', scores)).version,
+      schedule: async (matchId, kickoff) => call('mutation($m: ID!, $k: Float!) { scheduleMatch(matchId: $m, kickoff: $k) { version } }', { m: matchId, k: kickoff }, 'scheduleMatch', scores),
+      finish: async matchId => (await call('mutation($m: ID!) { endPeriod(matchId: $m, final: true) { version } }', { m: matchId }, 'endPeriod', scores)).version,
       plays: async (matchId, events) => call('mutation($m: ID!, $e: [StatEventInput!]!) { recordStats(matchId: $m, events: $e) }', { m: matchId, e: events }, 'recordStats', stats)
     };
   };
@@ -194,7 +199,80 @@ export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, 
       await closeAll(list);
     }
 
-    // 5. Limpeza: sem assinantes, o Router fecha os upstreams (e o plugin solta os frames).
+    // 5. Ciclo de vida (com lead): query × subscription pelo horário e pelo status,
+    //    e o FULL_TIME encerrando clientes deduplicados em várias instâncias.
+    if (lead) {
+      const snapshotUrl = channel => direct ? direct[channel === 'scoreboard' ? 'scores' : 'stats'] : lbUrl;
+      const watch = (matchId, { url = lbUrl, api = channel => snapshotApi(snapshotUrl(channel), channel, matchId, { headers }) } = {}) => {
+        const phases = []; const errors = []; const retainedSeen = { n: 0 };
+        const w = watchMatch({ matchId, lead, api,
+          connect: (channel, signal) => transports.multipart(url, channel, matchId, { signal, headers,
+            onPayload: payload => { if (payload.extensions?.retainedFrame) retainedSeen.n++; } }),
+          onPhase: p => phases.push(p),
+          onError: e => { errors.push(e); if (e.message.includes(RATE_LIMIT)) rateLimited ??= e.message.slice(0, 200); },
+          runOptions: { wait: () => 100 } });
+        return Object.assign(w, { phases, errors, retainedSeen });
+      };
+      const both = async m => ({ placar: await streams('scoreboard', m), estatisticas: await streams('stats', m) });
+      const r = (result.cicloDeVida = {});
+
+      // a) Encerrada: só queries, nenhuma subscription.
+      const ended = `fim-antes-${run}`;
+      await api.startPeriod(ended); await api.finish(ended);
+      const wEnded = watch(ended); await wEnded.done;
+      r.encerrada = { fases: wEnded.phases, subscriptions: wEnded.counts.subscriptions };
+      assert.deepEqual(wEnded.phases, ['over']); assert.equal(wEnded.counts.subscriptions, 0);
+
+      // b) Agendada: só a query até kickoff − lead; assina na janela pelo relógio.
+      const scheduled = `agendada-${run}`;
+      const kickoff = Date.now() + lead + 1500;
+      await api.schedule(scheduled, kickoff);
+      const wSched = watch(scheduled);
+      await until(() => wSched.phase === 'before', 'fase before');
+      const beforeStreams = await both(scheduled);
+      await until(() => wSched.phase === 'live' && wSched.syncs.scoreboard.synced && wSched.syncs.stats.synced, 'assinou na janela', 10_000);
+      r.agendada = { fases: [...wSched.phases], streamsAntesDaJanela: beforeStreams, assinouMsDepoisDaJanela: Date.now() - (kickoff - lead) };
+      assert.deepEqual(beforeStreams, { placar: 0, estatisticas: 0 });
+      await api.startPeriod(scheduled);
+      await until(() => wSched.syncs.scoreboard.state.status === 'LIVE', 'apito pelo stream');
+
+      // c) FULL_TIME com vários clientes deduplicados pelo balanceador (várias instâncias).
+      const crowd = Array.from({ length: 6 }, () => watch(scheduled));
+      await until(() => crowd.every(w => w.syncs.scoreboard.synced && w.syncs.stats.synced), 'clientes no jogo', 20_000);
+      const live = await both(scheduled);
+      const t0 = Date.now();
+      await api.finish(scheduled);
+      await Promise.all([wSched, ...crowd].map(w => w.done));
+      r.fimDoJogo = {
+        clientes: crowd.length + 1, streamsDuranteOJogo: live, todosEncerradosMs: Date.now() - t0,
+        reconexoes: [wSched, ...crowd].reduce((n, w) => n + w.errors.length, 0)
+      };
+      assert.ok([wSched, ...crowd].every(w => w.phase === 'over' && w.syncs.scoreboard.state.status === 'FULL_TIME'));
+      assert.equal(r.fimDoJogo.reconexoes, 0, 'ninguém reconectou depois do FULL_TIME');
+      await until(async () => { const b = await both(scheduled); return !b.placar && !b.estatisticas; }, 'upstreams fechados no subgraph', 20_000);
+
+      // d) Depois do fim, direto na subscription: estado final do subgraph (não um frame
+      //    retido do upstream que fechou) e o stream termina.
+      const late = { frames: [], retained: 0 };
+      for await (const frame of transports.multipart(routerUrls[0], 'scoreboard', scheduled, { headers,
+        onPayload: payload => { if (payload.extensions?.retainedFrame) late.retained++; } })) late.frames.push(frame.state.status);
+      r.depoisDoFim = { frames: late.frames, framesRetidos: late.retained };
+      assert.deepEqual(late.frames, ['FULL_TIME']); assert.equal(late.retained, 0);
+
+      // e) Query antiga dizendo LIVE (cache simulado no cliente) numa partida encerrada.
+      const stale = `live-antigo-${run}`;
+      await api.startPeriod(stale);
+      const liveSnapshot = await snapshotApi(snapshotUrl('scoreboard'), 'scoreboard', stale, { headers }).snapshot(0);
+      await api.finish(stale);
+      const ts = Date.now();
+      const wStale = watch(stale, { api: channel => channel === 'scoreboard' ? { snapshot: async () => liveSnapshot } : snapshotApi(snapshotUrl(channel), channel, stale, { headers }) });
+      await wStale.done;
+      r.liveAntigo = { fases: wStale.phases, fechouEmMs: Date.now() - ts, reconexoes: wStale.errors.length };
+      assert.deepEqual(wStale.phases, ['live', 'over']); assert.equal(wStale.errors.length, 0);
+      log(`ciclo de vida: ${JSON.stringify(r)}`);
+    }
+
+    // 6. Limpeza: sem assinantes, o Router fecha os upstreams (e o plugin solta os frames).
     {
       const ours = m => Object.keys(m).filter(k => k.endsWith(run));
       await until(async () => { const m = await metrics(); return !ours(m.scoreboard.activeByMatch ?? {}).length && !ours(m.stats.activeByMatch ?? {}).length; }, 'upstreams fechados no subgraph', 20_000);

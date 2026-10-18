@@ -31,9 +31,11 @@ if (!['passthrough', 'callback'].includes(mode)) throw new Error(`MODE inválido
 const config = join(root, mode === 'callback' ? 'router/router-plugin-callback.yaml' : 'router/router-plugin.yaml');
 const dir = mkdtempSync(join(tmpdir(), 'router-real-'));
 const periodicMs = Number(process.env.PERIODIC_MS ?? 3000);
+// Janela de início curta (padrão 2 s, em vez de 15 min) para a etapa do ciclo de vida.
+const lead = Number(process.env.LEAD_MS ?? 2000);
 const subgraphs = await startSubgraphs({
   dataDir: dir, host: '127.0.0.1', ports: { scores: 0, catalog: 0, stats: 0 },
-  scoreboard: { periodicMs }, stats: { periodicMs, throttleMs: 500 }
+  scoreboard: { periodicMs }, stats: { periodicMs, throttleMs: 500 }, liveLeadMs: lead
 });
 const base = name => `http://127.0.0.1:${subgraphs.ports[name]}`;
 const supergraph = join(dir, 'supergraph.graphql');
@@ -78,7 +80,7 @@ try {
   const result = await verifyRouterScale({
     lbUrl: lb.url, routerUrls: instances.slice(0, 3).map(i => i.url), plainUrl: instances[3].url,
     metrics: async () => ({ scoreboard: (await (await fetch(`${base('scores')}/metrics`)).json()).scoreboard, stats: (await (await fetch(`${base('stats')}/metrics`)).json()).stats }),
-    direct: { scores: `${base('scores')}/graphql`, stats: `${base('stats')}/graphql` },
+    direct: { scores: `${base('scores')}/graphql`, stats: `${base('stats')}/graphql` }, lead,
     kill: process.env.KILL === '0' ? undefined : async () => { lb.remove(killed.url); killed.proc.kill('SIGKILL'); },
     log: console.log
   });

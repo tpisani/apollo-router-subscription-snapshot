@@ -75,6 +75,25 @@ modos de subscription entre Router e subgraphs:
 | Instância derrubada (SIGKILL) com 12 clientes | 8 reconectaram; todos de volta em **142 ms**; sem regressão; estado igual ao banco | 8 reconectaram; **143 ms**; igual |
 | Limpeza | sem streams no subgraph | sem streams no subgraph (o subgraph para no 404 do Router) |
 
+**Ciclo de vida no Router de verdade** (etapa 5 do roteiro, janela de início de
+2 s; mesmo resultado nos dois modos):
+
+| Verificação | passthrough | callback |
+| --- | --- | --- |
+| Partida encerrada | fase `over`, 0 subscriptions | igual |
+| Agendada | 0 streams antes da janela; assinou 23 ms depois dela; apito pelo stream | 0 streams; 25 ms |
+| `FULL_TIME` com 7 clientes deduplicados pelo balanceador | 1 stream por canal no subgraph; todos encerrados em 9 ms; 0 reconexões; upstreams fechados | 13 ms; 0 reconexões |
+| Subscription depois do fim | só o frame `FULL_TIME` do subgraph, 0 frames retidos, e o stream termina | igual |
+| Query antiga dizendo `LIVE` (cache simulado no cliente) | fases `live` → `over` em 9 ms, 0 reconexões | 16 ms |
+
+**Duas medições fora do padrão, uma vez cada, no modo callback** (6 execuções do
+roteiro nesse modo): numa delas a recuperação após derrubar uma instância levou
+5.005 ms (nas outras, 140–144 ms; 5 s é o watchdog do cliente para stream parado),
+e um late joiner **sem** o plugin recebeu o estado em 10 ms em vez de ~2,8 s. Não
+se repetiram em duas execuções seguidas. A causa não foi investigada; o 10 ms
+combina com o upstream duplicado da deduplicação (que entrega o frame inicial na
+hora), mas o roteiro não mede os upstreams nessa etapa.
+
 ¹ **Deduplicação do Router sob concorrência (passthrough):** numa das execuções
 uma instância abriu 2 upstreams para a mesma partida (4 em vez de 3). A sonda
 `scripts/probe-dedup.mjs` (8 clientes simultâneos numa instância) reproduziu em

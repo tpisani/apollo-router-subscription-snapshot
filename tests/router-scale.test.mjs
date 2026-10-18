@@ -9,13 +9,13 @@ import { verifyRouterScale } from '../scripts/verify-router-scale.mjs';
 test('roteiro de várias instâncias com retenção (emulador)', { timeout: 120_000 }, async () => {
   const stack = await startStack({
     edgeCount: 3, edge: { identityHeaders: ['authorization'] },
-    scoreboard: { periodicMs: 2000 }, stats: { periodicMs: 2000, throttleMs: 200 }
+    scoreboard: { periodicMs: 2000 }, stats: { periodicMs: 2000, throttleMs: 200 }, liveLeadMs: 2000
   });
   const plain = await startEdge({ upstream: stack.url, retain: false, identityHeaders: ['authorization'], name: 'sem-retencao' });
   try {
     const result = await verifyRouterScale({
       lbUrl: stack.balancer.url, routerUrls: stack.edges.map(e => e.url), plainUrl: plain.url,
-      metrics: async () => stack.subgraphs.metrics, kill: () => stack.killEdge(1),
+      metrics: async () => stack.subgraphs.metrics, kill: () => stack.killEdge(1), lead: 2000,
       // Como no Router real com o plano gratuito: só as subscriptions passam pelas instâncias.
       direct: { scores: `http://127.0.0.1:${stack.subgraphs.ports.scores}/graphql`, stats: `http://127.0.0.1:${stack.subgraphs.ports.stats}/graphql` }
     });

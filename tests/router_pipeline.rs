@@ -25,7 +25,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
 // Linking the library registers the plugin in the Router plugin registry.
-use router_subscription_snapshot as _;
+use subscription_snapshot as _;
 
 const SCOREBOARD: &str = "subscription Scoreboard($matchId: ID!) { scoreboardUpdates(matchId: $matchId) { matchId version state { status home away } } }";
 

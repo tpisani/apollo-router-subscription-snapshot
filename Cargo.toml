@@ -1,10 +1,13 @@
 [package]
-name = "router-subscription-snapshot"
+name = "apollo-router-subscription-snapshot"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.97.1"
 publish = false
 description = "Apollo Router with the subscription_snapshot plugin: the latest state of a deduplicated subscription for late joiners"
+
+[lib]
+name = "subscription_snapshot"
 
 [[bin]]
 name = "router"

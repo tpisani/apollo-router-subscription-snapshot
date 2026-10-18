@@ -1,9 +1,9 @@
-// Patches por valor final: [{ path: ['home', 'shots'], value: 7 }].
-// Nunca incrementos. Isso dá duas propriedades que o protocolo usa:
-//   - idempotência: aplicar o mesmo patch duas vezes não muda nada;
-//   - sobreposição: um patch que cobre (from, to] aplicado sobre um estado em
-//     qualquer versão v com from <= v < to resulta no estado exato em `to`.
-//     (Campos alterados em (from, v] já estão em v, e o patch traz o valor deles em `to`.)
+// Final-value patches: [{ path: ['home', 'shots'], value: 7 }].
+// Never increments. That gives two properties the protocol relies on:
+//   - idempotence: applying the same patch twice changes nothing;
+//   - overlap: a patch covering (from, to] applied on top of a state at any
+//     version v with from <= v < to results in the exact state at `to`.
+//     (Fields changed in (from, v] are already in v, and the patch carries their value at `to`.)
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 export function diff(before, after, path = [], out = []) {
@@ -23,18 +23,19 @@ export function applyPatch(state, patch) {
       if (!isObject(node[key])) node[key] = {};
       node = node[key];
     }
-    // Cópia: o valor pode ser um objeto (ex.: jogador novo) e não pode ficar
-    // compartilhado com o patch, que é reaplicado e enviado a outros assinantes.
+    // Copy: the value may be an object (e.g. a new player) and must not stay
+    // shared with the patch, which is reapplied and sent to other subscribers.
     node[path.at(-1)] = structuredClone(value);
   }
   return state;
 }
 
-// Junta patches consecutivos mantendo o último valor de cada caminho, compactado:
-// um campo escrito dentro de um objeto já presente (ex.: jogador novo) é dobrado
-// nele, e um objeto novo descarta entradas antigas dos seus descendentes. Assim o
-// patch fundido tem no máximo uma entrada por campo, nunca uma por evento.
-// delete + set mantém cada entrada na posição da sua última escrita.
+// Merges consecutive patches keeping the last value of each path, compacted:
+// a field written inside an object already present (e.g. a new player) is folded
+// into it, and a new object drops older entries for its descendants. So the
+// merged patch has at most one entry per field, never one per event.
+// delete + set keeps each entry at the position of its last write.
+
 export function mergePatches(...patches) {
   const byPath = new Map();
   for (const patch of patches) for (const entry of patch) {

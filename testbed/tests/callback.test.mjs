@@ -13,10 +13,10 @@ async function until(predicate, message, ms = 5000) {
   throw new Error(`Timeout: ${message}`);
 }
 
-// Modo callback do Apollo Router, do lado do subgraph: um endpoint falso de
-// /callback registra as mensagens e responde como o Router (204 no check, 200 no
-// next; 404 quando não há mais clientes).
-test('subscription no modo callback: check, frames como next, 404 encerra o stream', { timeout: 30_000 }, async () => {
+// Apollo Router callback mode, on the subgraph side: a fake /callback endpoint
+// records the messages and answers like the Router (204 on check, 200 on
+// next; 404 when there are no clients left).
+test('subscription in callback mode: check, frames as next, 404 ends the stream', { timeout: 30_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'callback-'));
   const app = await startSubgraphs({ dataDir: dir, host: '127.0.0.1', ports: { scores: 0, catalog: 0, stats: 0 }, scoreboard: { periodicMs: 60_000 } });
   const messages = []; let gone = false;
@@ -34,22 +34,23 @@ test('subscription no modo callback: check, frames como next, 404 encerra o stre
     const response = await fetch(`http://127.0.0.1:${app.ports.scores}/graphql`, { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ query: 'subscription($m: ID!) { scoreboardUpdates(matchId: $m) { version state { home } } }', variables: { m: matchId },
         extensions: { subscription: { callbackUrl, subscriptionId: 'sub-1', verifier: 'v-1', heartbeatIntervalMs: 0 } } }) });
-    assert.deepEqual(await response.json(), { data: null }, 'responde { data: null } depois do check');
+    assert.deepEqual(await response.json(), { data: null }, 'replies { data: null } after the check');
     assert.equal(messages[0].action, 'check');
     assert.deepEqual([messages[0].kind, messages[0].id, messages[0].verifier], ['subscription', 'sub-1', 'v-1']);
 
-    await until(() => messages.some(m => m.action === 'next'), 'frame inicial');
+    await until(() => messages.some(m => m.action === 'next'), 'initial frame');
     const first = messages.find(m => m.action === 'next');
     assert.equal(first.payload.data.scoreboardUpdates.version, 1);
     app.stores.scoreboard.update(matchId, s => scoreboardOps.scoreGoal(s, { side: 'HOME' }, Date.now()));
-    await until(() => messages.some(m => m.action === 'next' && m.payload.data.scoreboardUpdates.state.home === 1), 'gol como next');
+    await until(() => messages.some(m => m.action === 'next' && m.payload.data.scoreboardUpdates.state.home === 1), 'goal as next');
     assert.equal(app.metrics.scoreboard.activeByMatch[matchId], 1);
 
-    // O Router não tem mais clientes nessa subscription: o próximo next recebe 404 e o stream fecha.
+    // The Router has no clients left on this subscription: the next "next" gets a 404 and the stream closes.
     gone = true;
     app.stores.scoreboard.update(matchId, s => scoreboardOps.scoreGoal(s, { side: 'AWAY' }, Date.now()));
-    await until(() => !app.metrics.scoreboard.activeByMatch[matchId], 'stream encerrado no subgraph');
-    assert.ok(!messages.some(m => m.action === 'complete'), 'sem complete depois de um 404');
+    await until(() => !app.metrics.scoreboard.activeByMatch[matchId], 'stream ended on the subgraph');
+    assert.ok(!messages.some(m => m.action === 'complete'), 'no complete after a 404'
+);
   } finally {
     router.close(); await app.close(); rmSync(dir, { recursive: true, force: true });
   }

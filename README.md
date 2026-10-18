@@ -1,9 +1,9 @@
-# `subscription_snapshot`: plugin do Apollo Router
+# `subscription_snapshot`: an Apollo Router plugin
 
-Plugin nativo do Apollo Router 2.18.0 que guarda o último evento de cada
-subscription deduplicada. Quem entra num upstream já aberto recebe esse estado na
-hora (1 ms no pipeline do Router), em vez de esperar o próximo frame do subgraph
-(~2,8 s com frame periódico de 3 s).
+A native Apollo Router 2.18.0 plugin that keeps the last event of each
+deduplicated subscription. A client that joins an already open upstream gets that
+state right away (1 ms in the Router pipeline), instead of waiting for the
+subgraph's next frame (~2.8 s with a periodic 3 s frame).
 
 ```yaml
 plugins:
@@ -12,99 +12,100 @@ plugins:
     identity_headers: [authorization]
 ```
 
-## Estrutura do repositório
+## Repository layout
 
-| Caminho | O que é |
+| Path | What it is |
 | --- | --- |
-| [`src/lib.rs`](src/lib.rs) | o plugin, com os testes de unidade |
-| [`src/main.rs`](src/main.rs) | o binário do Router com o plugin |
-| [`tests/router_pipeline.rs`](tests/router_pipeline.rs) | testes de integração no pipeline do Router (`TestHarness`) |
-| [`examples/router/`](examples/router/) | configs do Router com o plugin (passthrough e callback) |
-| [`docs/router-upgrades.md`](docs/router-upgrades.md) | o plugin e as versões do Apollo Router |
-| [`testbed/`](testbed/) | **auxiliar:** subgraphs, cliente, emulador e roteiros que testam e medem o plugin |
+| [`src/lib.rs`](src/lib.rs) | the plugin, with its unit tests |
+| [`src/main.rs`](src/main.rs) | the Router binary with the plugin |
+| [`tests/router_pipeline.rs`](tests/router_pipeline.rs) | integration tests in the Router pipeline (`TestHarness`) |
+| [`examples/router/`](examples/router/) | Router configs with the plugin (passthrough and callback) |
+| [`docs/router-upgrades.md`](docs/router-upgrades.md) | the plugin and Apollo Router versions |
+| [`testbed/`](testbed/) | **auxiliary:** subgraphs, client, emulator and scripts that test and measure the plugin |
 
-O `testbed/` é a POC que motivou o plugin (placar e estatísticas ao vivo em
-subgraphs federados) e a bancada para testá-lo; ver o
-[README do testbed](testbed/README.md).
+`testbed/` is the POC that motivated the plugin (live scoreboard and statistics on
+federated subgraphs) and the bench used to test it; see the
+[testbed README](testbed/README.md).
 
-## Como funciona
+## How it works
 
-- **Onde entra:** no `supergraph_service`. O stream de uma subscription começa com
-  um marcador (`subscribed: true`, sem dados) que o router service consome para
-  abrir o multipart e não envia. Por isso o frame retido vai **depois** do
-  marcador, antes dos eventos ao vivo.
-- **Chave:** documento + `operationName` + variáveis + os headers de
-  `identity_headers`. Tokens diferentes nunca compartilham frame retido.
-- **O que guarda:** só eventos com dados e sem erros.
-- **Ciclo de vida:** a entrada existe enquanto houver assinante com a chave. Quando
-  o último stream termina ou é descartado, o snapshot some junto com o upstream.
-- **Marcação:** o snapshot sai com `extensions.snapshot: true`. O cliente
-  não precisa dela (ele fica com a maior versão); os testes a usam para medir.
-- **Correção:** depende de todo frame trazer o estado inteiro e uma versão. Um frame
-  retido mais velho que um em trânsito é ignorado pelo cliente (ver o
-  [desenho](testbed/docs/design.md)).
+- **Where it hooks in:** the `supergraph_service`. A subscription stream starts
+  with a marker (`subscribed: true`, no data) that the router service consumes to
+  open the multipart response and does not send. So the retained frame goes
+  **after** the marker, before the live events.
+- **Key:** document + `operationName` + variables + the headers listed in
+  `identity_headers`. Different tokens never share a retained frame.
+- **What it keeps:** only events with data and without errors.
+- **Lifecycle:** the entry exists while there is a subscriber with that key. When
+  the last stream ends or is dropped, the snapshot goes away together with the
+  upstream.
+- **Marking:** the snapshot is sent with `extensions.snapshot: true`. The client
+  does not need it (it keeps the highest version); the tests use it to measure.
+- **Correctness:** relies on every frame carrying the full state and a version. A
+  retained frame older than one in flight is ignored by the client (see the
+  [design](testbed/docs/design.md)).
 
-Como recomenda a Apollo, o plugin é registrado com um nome de grupo
-(`register_plugin!("globo", "subscription_snapshot", …)`), então a chave
-em `plugins:` é `globo.subscription_snapshot`. O grupo evita colisão com
-plugins da Apollo e com outros plugins customizados no mesmo binário.
+As Apollo recommends, the plugin is registered with a group name
+(`register_plugin!("globo", "subscription_snapshot", …)`), so the key under
+`plugins:` is `globo.subscription_snapshot`. The group avoids collisions with
+Apollo's plugins and with other custom plugins in the same binary.
 
-## Compilar e testar (sem licença)
+## Build and test (no license needed)
 
-Precisa de Rust 1.97.1 (o mínimo do apollo-router 2.18.0, fixado em
-`rust-toolchain.toml`; o rustup instala sozinho) e `protoc`
-(`apt-get install protobuf-compiler libprotobuf-dev`). A primeira compilação do
-Router leva ~20 min.
+Requires Rust 1.97.1 (apollo-router 2.18.0's minimum, pinned in
+`rust-toolchain.toml`; rustup installs it automatically) and `protoc`
+(`apt-get install protobuf-compiler libprotobuf-dev`). The first Router build
+takes ~20 min.
 
 ```bash
 cargo fmt --all --check
 cargo clippy --release --all-targets --no-deps -- -D warnings
-cargo test --release          # testes de unidade (os de integração ficam ignorados)
+cargo test --release          # unit tests (the integration ones are ignored)
 cargo build --release         # target/release/router
 ./target/release/router config validate examples/router/router-plugin.yaml
 docker build -t apollo-router-subscription-snapshot .
 ```
 
-Os testes de integração precisam dos subgraphs do testbed:
+The integration tests need the testbed subgraphs:
 
 ```bash
 cd testbed && npm ci && npm run test:router-harness
 ```
 
-Sobe os subgraphs Node (frame periódico de 3 s) e roda `tests/router_pipeline.rs`
-com o `TestHarness` do crate: router service, deduplicação, passthrough
-`graphql_ws` e multipart de verdade, com o plugin carregado pela config. O
-`TestHarness` usa uma licença irrestrita só em testes; ele não serve tráfego nem
-substitui rodar o binário com GraphOS
-([testes com o Router de verdade](testbed/README.md#apollo-router-de-verdade-com-o-plugin)).
+This starts the Node subgraphs (periodic 3 s frame) and runs
+`tests/router_pipeline.rs` with the crate's `TestHarness`: the real router
+service, deduplication, `graphql_ws` passthrough and multipart, with the plugin
+loaded from the config. `TestHarness` uses an unrestricted license only in tests;
+it does not serve traffic and does not replace running the binary with GraphOS
+([tests with the real Router](testbed/README.md#the-real-apollo-router-with-the-plugin)).
 
-## Convenções
+## Conventions
 
-O crate segue os [exemplos de plugins nativos](https://github.com/apollographql/router/tree/dev/examples)
-e as regras de lint do repositório do Apollo Router:
+The crate follows the [native plugin examples](https://github.com/apollographql/router/tree/dev/examples)
+and the lint rules of the Apollo Router repository:
 
-- Uma lib com o plugin e um binário que só a linka (`use subscription_snapshot as _;`
-  basta para o `register_plugin!` valer), com os testes de integração em `tests/`.
-- `Plugin` com `type Config` (`Deserialize` + `JsonSchema`, `deny_unknown_fields`;
-  os doc comments viram a descrição no JSON schema da config) e hook montado com
-  `ServiceBuilder` e as layers do `apollo_router::layers`.
-- Edition 2024 e o mesmo `rustfmt.toml` (`style_edition = "2024"`), com um import
-  por linha, agrupados em std, crates externos e o próprio crate.
-- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` e `cargo doc`
-  com `RUSTDOCFLAGS=-D warnings`, como o `xtask lint` da Apollo; o CI roda os três.
-- Testes do hook com `tower_test::mock::pair` (o substituto que a Apollo indica para
-  os `Mock*Service`, obsoletos) e do registro com o `TestHarness`.
-- Código, comentários e mensagens em inglês.
+- A lib with the plugin and a binary that only links it (`use subscription_snapshot as _;`
+  is enough for `register_plugin!` to take effect), with the integration tests in `tests/`.
+- `Plugin` with `type Config` (`Deserialize` + `JsonSchema`, `deny_unknown_fields`;
+  the doc comments become the description in the config's JSON schema) and the hook
+  built with `ServiceBuilder` and the layers from `apollo_router::layers`.
+- Edition 2024 and the same `rustfmt.toml` (`style_edition = "2024"`), with one
+  import per line, grouped into std, external crates and the crate itself.
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo doc`
+  with `RUSTDOCFLAGS=-D warnings`, like Apollo's `xtask lint`; CI runs all three.
+- Hook tests with `tower_test::mock::pair` (the replacement Apollo points to for
+  the deprecated `Mock*Service`) and registration tests with `TestHarness`.
+- English everywhere: code, comments, messages, docs, file names, tests and commits.
 
-## Suporte e atualizações
+## Support and upgrades
 
-A Apollo não dá suporte a plugins nativos nem a binários customizados. Cada versão
-nova do Router exige recompilar e rodar `npm run test:router-harness`.
-[`docs/router-upgrades.md`](docs/router-upgrades.md) compara 20 versões
-(1.61 a 2.18) e mostra o que costuma quebrar:
-- **O código do plugin:** raramente. Ele compilou e passou em todos os testes na
-  2.18.0 sem mudanças.
-- **Em volta dele:** com frequência. A versão do Rust, a config YAML do Router (que
-  não serve para duas versões ao mesmo tempo) e dependências como o `schemars`.
+Apollo does not support native plugins or custom binaries. Every new Router
+version requires rebuilding and running `npm run test:router-harness`.
+[`docs/router-upgrades.md`](docs/router-upgrades.md) compares 20 versions
+(1.61 to 2.18) and shows what tends to break:
+- **The plugin code:** rarely. It compiled and passed every test on 2.18.0
+  without changes.
+- **Around it:** often. The Rust version, the Router YAML config (which cannot
+  serve two versions at once) and dependencies such as `schemars`.
 
-O guia também traz o passo a passo de atualização.
+The guide also has the step-by-step upgrade procedure.

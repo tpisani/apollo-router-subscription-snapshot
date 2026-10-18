@@ -3,9 +3,9 @@ services:
     build: .
     environment:
       DATA_DIR: /data
-      # Simula a partida m1 (lances e gols); remova para usar só as mutations.
+      # Simulates match m1 (plays and goals); remove it to use the mutations only.
       SIMULATE: m1
-      # Frame periódico; maior deixa mais visível o efeito da retenção.
+      # Periodic frame; a larger value makes the retention effect more visible.
       SCOREBOARD_PERIODIC_MS: ${SCOREBOARD_PERIODIC_MS:-1000}
       STATS_PERIODIC_MS: ${STATS_PERIODIC_MS:-1000}
     volumes:
@@ -20,7 +20,7 @@ services:
       timeout: 2s
       retries: 20
 
-  # Hive Gateway (MIT): roda sem licença. graphql-ws/SSE para clientes.
+  # Hive Gateway (MIT): runs without a license. graphql-ws/SSE for clients.
   gateway:
     build: .
     environment:
@@ -35,8 +35,8 @@ services:
       subgraphs:
         condition: service_healthy
 
-  # Emula a deduplicação de subscriptions e (no pior caso) o cache de queries do
-  # Router, em multipart. Ver emulator/edge.mjs.
+  # Emulates the Router's subscription deduplication and (in the worst case) its
+  # query cache, over multipart. See emulator/edge.mjs.
   edge:
     build: .
     environment:
@@ -48,8 +48,8 @@ services:
     depends_on:
       - gateway
 
-  # Perfil apollo: o Apollo Router de verdade (exige APOLLO_KEY/APOLLO_GRAPH_REF
-  # com licença para subscriptions federadas e response cache).
+  # apollo profile: the real Apollo Router (requires APOLLO_KEY/APOLLO_GRAPH_REF
+  # with a license for federated subscriptions and response cache).
   #   docker compose --profile apollo up --build -d
   supergraph:
     profiles: [apollo, apollo-plugin]
@@ -89,10 +89,11 @@ services:
       redis:
         condition: service_healthy
 
-  # Perfil apollo-plugin: o Router customizado da raiz do repositório (apollo-router
-  # 2.18.0 + subscription_snapshot), em 3 instâncias atrás de um balanceador sem
-  # afinidade, e uma quarta com a retenção desligada para comparar. Exige
-  # APOLLO_KEY/APOLLO_GRAPH_REF (subscriptions federadas estão no plano gratuito).
+  # apollo-plugin profile: the custom Router from the repository root (apollo-router
+  # 2.18.0 + subscription_snapshot), as 3 instances behind a balancer without
+  # affinity, plus a fourth one with retention off for comparison. Requires
+  # APOLLO_KEY/APOLLO_GRAPH_REF (federated subscriptions are in the free plan).
+
   #   docker compose --profile apollo-plugin up --build -d
   #   npm run test:router-scale
   router-a: &plugin-router

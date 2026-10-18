@@ -1,10 +1,10 @@
-// Estado + versão de um canal de uma partida. Os dois canais (placar e
-// estatísticas) mandam frames STATE com o estado inteiro, então a regra é uma só:
-// fica o de maior versão. Não há lacuna a recuperar: perda, duplicata, reconexão
-// e late joiner se resolvem com o próximo frame, retido pelo edge/Router ou periódico.
-// A base (minVersion 0, provavelmente do cache) só serve para desenhar a tela antes
-// do primeiro frame. synced = já recebeu um frame nesta conexão.
-//   fromWire: converte o formato da API (ex.: jogadores em lista → mapa por id).
+// State + version of one channel of a match. Both channels (scoreboard and
+// stats) send STATE frames with the full state, so there is a single rule:
+// the highest version wins. There is no gap to recover: loss, duplicates, reconnects
+// and late joiners are solved by the next frame, retained by the edge/Router or periodic.
+// The base (minVersion 0, probably from the cache) only serves to draw the screen
+// before the first frame. synced = already got a frame on this connection.
+//   fromWire: converts the API format (e.g. players as a list → map by id).
 export class StateSync {
   constructor({ matchId, api, fromWire = state => state }) {
     this.matchId = matchId; this.api = api; this.fromWire = fromWire;
@@ -12,7 +12,7 @@ export class StateSync {
     this.stats = { snapshots: 0, frames: 0, applied: 0, ignored: 0, stale: 0 };
   }
   initialize(snapshot) {
-    if (snapshot.matchId !== this.matchId) throw new Error('Snapshot de outra partida');
+    if (snapshot.matchId !== this.matchId) throw new Error('Snapshot from another match');
     if (this.version !== null && snapshot.version <= this.version) return;
     this.state = this.fromWire(structuredClone(snapshot.state)); this.version = snapshot.version; this.stats.snapshots++;
   }
@@ -21,11 +21,11 @@ export class StateSync {
     return this.base;
   }
   async accept(frame) {
-    if (frame.matchId !== this.matchId) throw new Error('Frame de outra partida');
+    if (frame.matchId !== this.matchId) throw new Error('Frame from another match');
     this.stats.frames++;
     if (this.version !== null && frame.version <= this.version) {
-      // Mais velho ou igual ao que já tenho: frame retido de outra instância, periódico
-      // atrasado ou duplicata. Nunca regride.
+      // Older than or equal to what I have: a retained frame from another instance, a
+      // late periodic frame or a duplicate. Never goes back.
       this.stats.ignored++; if (frame.version < this.version) this.stats.stale++;
     } else {
       this.state = this.fromWire(structuredClone(frame.state)); this.version = frame.version; this.stats.applied++;
@@ -37,16 +37,16 @@ export class StateSync {
 
 export const statsFromWire = ({ players, ...teams }) => ({ ...teams, players: Object.fromEntries(players.map(({ id, ...p }) => [id, p])) });
 export const createSync = (channel, options) => new StateSync({ ...options, fromWire: channel === 'stats' ? statsFromWire : undefined });
-// O placar no FULL_TIME é final: o subgraph encerra o stream e o cliente não reconecta.
+// The scoreboard at FULL_TIME is final: the subgraph ends the stream and the client does not reconnect.
 export const isFinalScoreboard = state => state?.status === 'FULL_TIME';
 
-// Uma conexão do stream; frames processados em ordem. Devolve 'final' quando o
-// estado é final (isFinal); senão o fim do stream é falha e o chamador reconecta.
+// One stream connection; frames processed in order. Returns 'final' when the
+// state is final (isFinal); otherwise the end of the stream is a failure and the caller reconnects.
 export async function runSession(sync, frames, { onUpdate = () => {}, isFinal = () => false } = {}) {
   sync.synced = false;
   const iterator = frames[Symbol.asyncIterator]();
   if (sync.version === null) {
-    // Render provisório: a base pode chegar antes do primeiro frame.
+    // Provisional render: the base may arrive before the first frame.
     sync.startBase().then(snapshot => {
       if (sync.version === null) { sync.initialize(snapshot); onUpdate(sync.view()); }
     }, () => {});
@@ -56,7 +56,7 @@ export async function runSession(sync, frames, { onUpdate = () => {}, isFinal = 
       const next = await iterator.next();
       if (next.done) {
         if (isFinal(sync.state)) return 'final';
-        throw new Error('Stream encerrado; reconectar');
+        throw new Error('Stream ended; reconnect');
       }
       await sync.accept(next.value);
       onUpdate(sync.view());
@@ -67,9 +67,9 @@ export async function runSession(sync, frames, { onUpdate = () => {}, isFinal = 
 
 const backoff = attempt => Math.min(10_000, 200 * 2 ** attempt) * (0.5 + Math.random() / 2);
 
-// Reconexão com backoff e watchdog (sem frame em stallMs = conexão morta). O
-// estado é mantido; a retomada é o próximo frame (retido pelo edge/Router ou periódico).
-// Termina quando o estado fica final (isFinal) ou com signal.
+// Reconnect with backoff and a watchdog (no frame within stallMs = dead connection). The
+// state is kept; resuming is the next frame (retained by the edge/Router or periodic).
+// Ends when the state becomes final (isFinal) or on signal.
 export async function runSync({ sync, connect, signal, stallMs = 5000, onUpdate = () => {}, onError = () => {}, wait = backoff, isFinal = () => false }) {
   let attempt = 0;
   while (!signal?.aborted) {
@@ -79,7 +79,8 @@ export async function runSync({ sync, connect, signal, stallMs = 5000, onUpdate 
     let lastFrame = Date.now();
     const watchdog = setInterval(() => {
       if (sync.busy) lastFrame = Date.now();
-      else if (Date.now() - lastFrame > stallMs) session.abort(new Error('Stream parado'));
+      else if (Date.now() - lastFrame > stallMs) session.abort(new Error('Stream stalled'
+));
     }, Math.min(1000, stallMs / 2));
     try {
       const outcome = await runSession(sync, connect(session.signal), { isFinal, onUpdate: view => { lastFrame = Date.now(); attempt = 0; onUpdate(view); } });

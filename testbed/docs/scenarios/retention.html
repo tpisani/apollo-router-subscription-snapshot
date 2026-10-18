@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Retention across instances</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a live broadcast protocol guide. Each scenario is a swimlane diagram
+   (Client · Router · Subgraphs) with clickable steps and a panel with the state of the
+   client's two channels (scoreboard and stats) after each step. */
+:root {
+  --bg: #f3f6f4; --surface: #ffffff; --ink: #16211c; --muted: #53635b; --line: #d2dcd6; --soft: #e8eeea;
+  --score: #1f50b8; --score-bg: #e5ecfa;
+  --stats: #a54a12; --stats-bg: #fbeadf;
+  --query: #6d36a8; --query-bg: #f0e8f9;
+  --hit: #7a5a00; --hit-bg: #fbf0c8;
+  --db: #1b6e4a; --db-bg: #ddf1e6;
+  --warn: #ad321b; --warn-bg: #fae5df;
+  --sel: #fffbe6;
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d1311; --surface: #141c19; --ink: #e2e9e5; --muted: #97a69e; --line: #29362f; --soft: #1b2521;
+  --score: #88a9ff; --score-bg: #1a2540; --stats: #f2a06a; --stats-bg: #3a2414;
+  --query: #caa3f2; --query-bg: #2a1d3b; --hit: #f0cf6a; --hit-bg: #3a3112;
+  --db: #6ccf9f; --db-bg: #12301f; --warn: #ff8f78; --warn-bg: #3b1a14;
+  --sel: #232a1c; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0d1311; --surface: #141c19; --ink: #e2e9e5; --muted: #97a69e; --line: #29362f; --soft: #1b2521;
+  --score: #88a9ff; --score-bg: #1a2540; --stats: #f2a06a; --stats-bg: #3a2414;
+  --query: #caa3f2; --query-bg: #2a1d3b; --hit: #f0cf6a; --hit-bg: #3a3112;
+  --db: #6ccf9f; --db-bg: #12301f; --warn: #ff8f78; --warn-bg: #3b1a14;
+  --sel: #232a1c; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--f-body); }
+.wrap { max-width: 1120px; margin: 0 auto; padding-block: 28px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 600; text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(28px, 4vw, 38px); }
+h2 { font-size: 24px; }
+h3 { font-size: 15px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+p { margin: 0; max-width: 70ch; }
+code, .mono { font-family: var(--f-mono); font-size: 12.5px; }
+.lede { color: var(--muted); margin-top: 10px; font-size: 16px; }
+header.top { display: grid; gap: 6px; margin-bottom: 26px; }
+
+.scoreline { display: inline-flex; align-items: center; gap: 10px; font: 600 15px var(--f-display); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; width: fit-content; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.scoreline .clock { font: 500 13px var(--f-mono); color: var(--muted); }
+
+.channels { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.channel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 8px; min-width: 0; border-top: 3px solid var(--c); }
+.channel.c-score { --c: var(--score); }
+.channel.c-stats { --c: var(--stats); }
+.channel h2 { font-size: 20px; }
+.channel dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13.5px; }
+.channel dt { color: var(--muted); }
+.channel dd { margin: 0; }
+.pieces { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 22px; }
+.piece { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.piece .k { font-family: var(--f-mono); font-size: 12.5px; word-break: break-word; }
+.piece p { font-size: 13.5px; color: var(--muted); }
+.tag { display: inline-flex; align-items: center; gap: 6px; font: 500 11px/1 var(--f-body); letter-spacing: .05em; text-transform: uppercase; padding: 4px 7px; border-radius: 4px; width: fit-content; }
+.t-score { color: var(--score); background: var(--score-bg); }
+.t-stats { color: var(--stats); background: var(--stats-bg); }
+.t-query { color: var(--query); background: var(--query-bg); }
+.t-hit { color: var(--hit); background: var(--hit-bg); }
+.t-db { color: var(--db); background: var(--db-bg); }
+.t-warn { color: var(--warn); background: var(--warn-bg); }
+.t-miss { color: var(--muted); background: var(--soft); }
+
+.tablebox { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 18px; }
+table { border-collapse: collapse; width: 100%; min-width: 780px; font-size: 13.5px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 500; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+tr:last-child td { border-bottom: 0; }
+td a { color: var(--ink); font-weight: 600; text-decoration-color: var(--line); text-underline-offset: 3px; }
+
+nav.jump { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 10px; display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+@media (max-width: 700px) { nav.jump { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; } nav.jump a { white-space: nowrap; flex: none; } }
+nav.jump a { font-size: 13px; color: var(--ink); text-decoration: none; padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+nav.jump a:hover, nav.jump a:focus-visible { border-color: var(--score); outline: none; }
+
+section.scen { padding-top: 34px; display: grid; gap: 14px; scroll-margin-top: 60px; }
+.scen-head { display: grid; gap: 6px; }
+.when { color: var(--muted); }
+.start { display: flex; flex-wrap: wrap; gap: 8px; }
+.start span { font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; }
+.start b { font-weight: 600; }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 14px; align-items: start; }
+@media (max-width: 860px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+
+.diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; }
+.lanes { --num: 34px; min-width: 620px; display: grid; grid-template-columns: var(--num) repeat(3, minmax(0, 1fr)); position: relative;
+  background-image: linear-gradient(var(--line), var(--line)), linear-gradient(var(--line), var(--line)), linear-gradient(var(--line), var(--line));
+  background-size: 1px 100%; background-repeat: no-repeat;
+  background-position: calc(var(--num) + (100% - var(--num)) / 6) 0, calc(var(--num) + (100% - var(--num)) / 2) 0, calc(var(--num) + 5 * (100% - var(--num)) / 6) 0; }
+.lane-h { position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--line); padding: 10px 6px; text-align: center; font: 600 13px/1.2 var(--f-display); }
+.lane-h small { display: block; font: 400 11.5px/1.3 var(--f-body); color: var(--muted); }
+.step { display: contents; }
+.step > * { cursor: pointer; }
+.n { grid-column: 1; position: relative; z-index: 1; display: grid; place-items: start center; padding-top: 14px; font: 500 12px var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.cell { padding: 10px 8px; position: relative; z-index: 1; min-width: 0; }
+.row-bg { grid-column: 1 / -1; z-index: 0; }
+.step.sel .row-bg { background: var(--sel); box-shadow: inset 3px 0 0 var(--score); }
+.step:hover .row-bg { background: var(--soft); }
+.step.sel:hover .row-bg { background: var(--sel); }
+
+.arrow { --n: 1; padding-inline: calc(50% / var(--n)); display: grid; gap: 3px; }
+.arrow .lbl { font-size: 13px; text-align: center; line-height: 1.35; }
+.arrow .line { height: 2px; position: relative; background: currentColor; }
+.arrow.dash .line { background: repeating-linear-gradient(90deg, currentColor 0 7px, transparent 7px 12px); }
+.arrow .line::after { content: ""; position: absolute; top: -5px; border: 6px solid transparent; }
+.arrow.right .line::after { right: -2px; border-left: 9px solid currentColor; border-right: 0; }
+.arrow.left .line::after { left: -2px; border-right: 9px solid currentColor; border-left: 0; }
+.arrow .code { font-family: var(--f-mono); font-size: 11.5px; color: var(--ink); text-align: center; word-break: break-word; }
+.arrow .badges, .box .badges { display: flex; justify-content: center; gap: 4px; flex-wrap: wrap; }
+.k-score { color: var(--score); }
+.k-stats { color: var(--stats); }
+.k-query { color: var(--query); }
+.k-db { color: var(--db); }
+.k-err { color: var(--warn); }
+.box { border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 7px 9px; font-size: 13px; display: grid; gap: 4px; }
+.box.k-db { border-color: color-mix(in srgb, var(--db) 45%, var(--line)); }
+.box.k-err { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.box.k-score { border-color: color-mix(in srgb, var(--score) 45%, var(--line)); }
+.box.k-stats { border-color: color-mix(in srgb, var(--stats) 45%, var(--line)); }
+.box .t { color: var(--ink); }
+.box .code { font-family: var(--f-mono); font-size: 11.5px; color: var(--muted); word-break: break-word; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 12px; position: sticky; top: 64px; }
+@media (max-width: 860px) { .panel { position: static; } }
+.panel .stepname { font-size: 13.5px; }
+.chan { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: baseline; font-size: 13.5px; padding: 8px 10px; border-radius: 6px; background: var(--bg); border-left: 3px solid var(--c); }
+.chan.c-score { --c: var(--score); } .chan.c-stats { --c: var(--stats); }
+.chan.off { opacity: .55; }
+.chan b { font-weight: 600; grid-column: 1 / -1; }
+.chan dt { color: var(--muted); } .chan dd { margin: 0; font: 13px var(--f-mono); font-variant-numeric: tabular-nums; }
+.screen { border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.s-none { background: var(--soft); color: var(--muted); }
+.s-prov { background: var(--hit-bg); color: var(--hit); }
+.s-catch { background: var(--query-bg); color: var(--query); }
+.s-sync { background: var(--db-bg); color: var(--db); }
+.panel .why { font-size: 13.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; }
+.controls { display: flex; gap: 6px; flex-wrap: wrap; }
+button { font: 500 13px var(--f-body); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+button:hover { border-color: var(--score); }
+button:focus-visible, .n:focus-visible { outline: 2px solid var(--score); outline-offset: -2px; }
+.tally { display: flex; flex-wrap: wrap; gap: 6px; }
+.result { font-size: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; display: grid; gap: 6px; }
+.result b { font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 16px; font-size: 13px; color: var(--muted); margin: 0 0 18px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 22px; height: 2px; background: currentColor; display: inline-block; }
+.sw.dash { background: repeating-linear-gradient(90deg, currentColor 0 5px, transparent 5px 8px); }
+footer { margin-top: 40px; color: var(--muted); font-size: 13px; }
+@media (prefers-reduced-motion: no-preference) { .step .row-bg { transition: background .15s; } }
+.retained { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font: 13px var(--f-mono); padding: 8px 10px; border-radius: 6px; background: var(--hit-bg); color: var(--ink); }
+.screen.s-prov { background: var(--soft); color: var(--muted); }
+</style>
+
+<style>body { margin: 0; } :root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); } [hidden] { display: none !important; } .banner { font-size: 13.5px; background: var(--hit-bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; } .banner a { color: inherit; }</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h3>apollo-router-subscription-snapshot · branch claude/realtime-push-feed</h3>
+    <h1>Retaining the last state across several instances</h1>
+    <p class="lede">How each client reaches the current state when every frame carries the full state and each Router instance (here, the edge that emulates the plugin) keeps the last frame of each deduplicated subscription. There are several instances behind a balancer, without session affinity. Click a step to see the client's state and the retained frame, or use <b>Play</b>.</p>
+    <div class="scoreline" aria-label="Sample match">Atlético Serrano <span>1 × 0</span> União Litoral <span class="clock">2nd H · 63:12</span></div>
+  </header>
+
+  <div class="channels">
+    <div class="channel c-score">
+      <span class="tag t-score">what changed</span>
+      <h2>One kind of frame: STATE { version, state }</h2>
+      <dl>
+        <dt>Scoreboard</dt><dd>on every commit, right away, and every 1 s</dd>
+        <dt>Stats</dt><dd>limiter: right away when quiet, at most 1 every 500 ms in a burst, and every 1 s</dd>
+        <dt>Client</dt><dd>keeps the frame with the highest version; ignores the others. No gap, no history, no recovery query.</dd>
+      </dl>
+    </div>
+    <div class="channel c-stats">
+      <span class="tag t-stats">retention · per instance</span>
+      <h2>The last frame of each upstream</h2>
+      <dl>
+        <dt>Keeps</dt><dd>each instance keeps the last frame of each deduplicated upstream it has open</dd>
+        <dt>Delivers</dt><dd>a client joining an already open upstream gets that frame right away</dd>
+        <dt>Key</dt><dd>operation + variables + identity (<code>authorization</code>)</dd>
+        <dt>Goes away</dt><dd>together with the upstream, when the last subscriber leaves</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="pieces">
+    <div class="piece"><span class="tag t-db">measured</span><div class="k">12 ms × 1,997 ms</div>
+      <p>Joining an idle match with retention, versus waiting for the 2 s periodic frame without it.</p></div>
+    <div class="piece"><span class="tag t-db">measured</span><div class="k">~150 ms</div>
+      <p>For every client of a killed instance to be synced again on another one, with no version regression.</p></div>
+    <div class="piece"><span class="tag t-db">measured</span><div class="k">6 streams, not 30</div>
+      <p>30 clients on 2 matches behind 3 instances: streams per channel on the subgraph = instances × matches.</p></div>
+    <div class="piece"><span class="tag t-warn">not verified</span><div class="k">native plugin (Rust)</div>
+      <p>In the Apollo Router, retention would require a plugin in a custom build. Here it is emulated in the edge.</p></div>
+  </div>
+
+  <div class="legend" aria-label="Legend">
+    <span class="k-score"><i class="sw"></i>scoreboard</span>
+    <span class="k-stats"><i class="sw"></i>stats</span>
+    <span class="k-query"><i class="sw"></i>query</span>
+    <span class="k-query"><i class="sw dash"></i>response</span>
+    <span><span class="tag t-hit">RETAINED</span> frame delivered by the instance</span>
+    <span><span class="tag t-db">database</span> commit or read</span>
+    <span><span class="tag t-warn">failure</span> drop</span>
+  </div>
+
+  <div class="tablebox">
+    <table>
+      <thead><tr><th>Scenario</th><th>When it happens</th><th>Subscriptions</th><th>Queries</th><th>Outcome</th></tr></thead>
+      <tbody id="summary"></tbody>
+    </table>
+  </div>
+
+  <nav class="jump" id="jump" aria-label="Scenarios"></nav>
+  <div id="scenarios"></div>
+
+  <footer>Sample numbers: match <code>m1</code>, instances A, B and C behind a round-robin balancer. Measurements: <code>tests/scale.test.mjs</code> and <code>npm run bench</code> on the branch. Code: <code>emulator/edge.mjs</code> (retention, identity), <code>emulator/balancer.mjs</code>, <code>subgraphs/channels.mjs</code> (limiter), <code>client/sync.mjs</code> (<code>StateSync</code>).</footer>
+</div>
+
+<script>
+const L = { c: 2, r: 3, s: 4 };
+// st: [scoreboard version, synced, stats version, synced, screen, frame retained on the instance]
+const scenarios = [
+  {
+    id: 'first', name: 'First client on an instance',
+    when: 'The balancer sends the client to instance A, where nobody subscribes to the match yet.',
+    start: [['Instance A', 'no upstream for m1'], ['Scoreboard in the database', 'version 3'], ['Stats in the database', 'version 40'], ['Client', 'no state']],
+    subs: 'opens both upstreams', queries: '0 (optional base)', outcome: "right on the subgraph's initial frame",
+    channels: ['score', 'stats'],
+    result: 'With no upstream on the instance there is no retained frame, and none is needed: when the upstream opens, the subgraph sends <b>right away</b> a frame with the current state. The instance starts keeping it.',
+    tally: [['t-score', '2 subscriptions'], ['t-query', '0 queries'], ['t-db', "subgraph's initial frame"]],
+    steps: [
+      { a: ['c', 'r'], k: 'score', lbl: 'Scoreboard and stats subscriptions (via balancer → A)', code: 'scoreboardUpdates · statsUpdates (matchId: "m1")', st: [null, false, null, false, 'none', 'A: nothing kept'],
+        why: 'It may request the cached base (minVersion 0) in parallel to draw right away; that is optional.' },
+      { a: ['r', 's'], k: 'score', lbl: 'A has no upstream for these keys: opens one per channel', code: 'graphql-ws → scores · stats', st: [null, false, null, false, 'none', 'A: nothing kept'],
+        why: 'One upstream per (channel, match, identity) on this instance.' },
+      { box: 's', k: 'db', lbl: 'The hubs register the new subscriber and send the current state right away', code: 'STATE v3 (scoreboard) · STATE v40 (stats)', st: [null, false, null, false, 'none', 'A: nothing kept'],
+        why: 'Every new upstream gets an initial frame. That is what makes sharing across instances unnecessary.' },
+      { a: ['s', 'c'], k: 'score', lbl: 'A forwards and keeps both frames', code: 'STATE v3 · STATE v40', st: [3, true, 40, true, 'sync', 'A: scoreboard v3 · stats v40'],
+        why: 'Client synced on both channels without any query.' }
+    ]
+  },
+  {
+    id: 'late', name: 'Late joiner on an idle match',
+    when: 'Half time: no commits for minutes. A new client lands on instance A, which already has the upstreams open.',
+    start: [['Instance A', 'upstreams open'], ['Frames retained on A', 'scoreboard v4 · stats v812'], ['Commits', 'none'], ['Client', 'no state']],
+    subs: "joins A's upstreams", queries: '0', outcome: 'state right away (12 ms measured)',
+    channels: ['score', 'stats'],
+    result: 'The client gets the state <b>right away</b>, without waiting for the next periodic frame. Measured with a 2 s periodic frame: <b>12 ms with retention</b>, 1,997 ms without.',
+    tally: [['t-hit', '2 retained frames'], ['t-query', '0 queries'], ['t-score', '0 new frames from the subgraph']],
+    steps: [
+      { a: ['c', 'r'], k: 'score', lbl: 'Subscriptions (via balancer → A)', code: 'scoreboardUpdates · statsUpdates (matchId: "m1")', st: [null, false, null, false, 'none', 'A: scoreboard v4 · stats v812'],
+        why: 'Same keys as the clients already on A.' },
+      { box: 'r', k: 'score', lbl: 'Deduplication: joins the upstreams that already exist', code: 'nothing goes to the subgraph', st: [null, false, null, false, 'none', 'A: scoreboard v4 · stats v812'],
+        why: 'Without retention, the client would wait for the next frame: a commit (which does not come, the match is idle) or the periodic one.' },
+      { a: ['r', 'c'], k: 'score', lbl: 'A writes the retained frames first', badges: [['t-hit', 'RETAINED'], ['t-hit', 'RETAINED']], code: 'STATE v4 · STATE v812', st: [4, true, 812, true, 'sync', 'A: scoreboard v4 · stats v812'],
+        why: 'Full state with a version: enough for the screen, without a query. After that the client gets the live frames like the others.' }
+    ]
+  },
+  {
+    id: 'goal', name: 'Live goal',
+    when: 'Normal path: clients connected to several instances and a goal is scored.',
+    start: [['Clients', 'on A, B and C'], ['Scoreboard in the database', 'version 4'], ['Retained', 'scoreboard v4 on A, B, C'], ['Scoreboard upstreams', '1 per instance']],
+    subs: 'already open', queries: '0', outcome: 'goal in ~10 ms; retained frames updated',
+    channels: ['score', 'stats'],
+    result: 'One frame goes out from the subgraph to each instance (not to each client). Each instance fans it out to its clients and <b>updates the retained frame</b>, so whoever joins later already gets the new scoreboard.',
+    tally: [['t-score', '1 frame per instance'], ['t-query', '0 queries']],
+    steps: [
+      { box: 's', k: 'db', lbl: 'scores: scoreGoal (AWAY) → 1 × 1, version 5', code: 'BEGIN IMMEDIATE … COMMIT', st: [4, true, 812, true, 'sync', 'A, B, C: scoreboard v4'], why: 'Published only after COMMIT.' },
+      { a: ['s', 'r'], k: 'score', lbl: 'The hub sends right away, one frame per upstream (A, B and C)', code: 'STATE v5', st: [4, true, 812, true, 'sync', 'A, B, C: scoreboard v4'],
+        why: 'Streams on the subgraph = instances × matches × channels. With 3 instances that is 3 sends, for a thousand or a million clients.' },
+      { box: 'r', k: 'score', lbl: 'Each instance fans out to its clients and swaps the retained frame', code: 'retained: v4 → v5', st: [4, true, 812, true, 'sync', 'A, B, C: scoreboard v5'],
+        why: 'The retained frame is always the last one that went through that upstream.' },
+      { a: ['r', 'c'], k: 'score', lbl: 'Frame arrives', code: 'STATE v5', st: [5, true, 812, true, 'sync', 'A, B, C: scoreboard v5'],
+        why: 'Version 5 > 4: replaces. Measured: p50 10–14 ms with 1 or 3 instances.' }
+    ]
+  },
+  {
+    id: 'burst', name: 'Stats burst',
+    when: 'An attack with 200 plays/s for 3 s.',
+    start: [['Client', 'stats v812'], ['Pace', '200 plays/s'], ['Limiter', '500 ms'], ['Retained on A', 'stats v812']],
+    subs: 'already open', queries: '0', outcome: '≤ 2 frames/s, each with the full state',
+    channels: ['score', 'stats'],
+    result: 'The limiter turns 600 commits into ~6 frames. Each one carries the latest full state, and each one updates the retained frame.',
+    tally: [['t-stats', '~2 frames/s'], ['t-query', '0 queries']],
+    steps: [
+      { box: 's', k: 'db', lbl: 'First play after a quiet period', code: 'version 813', st: [5, true, 812, true, 'sync', 'A: stats v812'],
+        why: 'Nothing went out in the last 500 ms: the frame goes out right away.' },
+      { a: ['s', 'c'], k: 'stats', lbl: 'Immediate frame', code: 'STATE v813', st: [5, true, 813, true, 'sync', 'A: stats v813'], why: 'An isolated play arrives in ms.' },
+      { box: 's', k: 'db', lbl: 'The next 100 plays arrive within the window', code: 'versions 814 … 913', st: [5, true, 813, true, 'sync', 'A: stats v813'],
+        why: 'The hub sends nothing until the window closes; it only keeps the latest state.' },
+      { a: ['s', 'c'], k: 'stats', lbl: 'End of the window: one frame with the latest state', code: 'STATE v913, committedAt = that of play 814', st: [5, true, 913, true, 'sync', 'A: stats v913'],
+        why: "committedAt is that of the oldest commit not yet sent: the measured latency is that of the frame's oldest data (~500 ms)." },
+      { box: 'r', k: 'score', lbl: 'A goal in the middle of the burst goes through another upstream', code: 'scoreboard STATE v6, right away', st: [6, true, 913, true, 'sync', 'A: scoreboard v6 · stats v913'],
+        why: 'Scoreboard and stats share neither a queue nor a limiter.' }
+    ]
+  },
+  {
+    id: 'switch', name: 'Reconnect on another instance',
+    when: "The client's network flickers. On reconnect, the balancer sends it to instance B, whose retained frame is slightly behind.",
+    start: [['Client', 'stats v42 (via A)'], ['Retained on B', 'stats v41'], ['Next frame', 'v43'], ['Session affinity', 'none']],
+    subs: 'reopens on B', queries: '0', outcome: 'older retained frame ignored; never goes back',
+    channels: ['stats'],
+    result: "B's retained frame is <b>older</b> than what the client has and is ignored. The screen does not go back in time, and the next frame (v43) proceeds normally. The property test with 3 instances asserts this across 25 seeds.",
+    tally: [['t-hit', 'retained v41 ignored'], ['t-stats', 'v43 applied'], ['t-query', '0 queries']],
+    steps: [
+      { box: 'c', k: 'err', lbl: 'The connection to A drops', code: 'state kept on screen: v42', st: [6, false, 42, false, 'prov', 'B: stats v41'],
+        why: 'The instances get the frames milliseconds apart; B may be one frame behind A.' },
+      { a: ['c', 'r'], k: 'stats', lbl: 'Reconnects; the balancer picks B', code: 'statsUpdates (matchId: "m1")', st: [6, false, 42, false, 'prov', 'B: stats v41'], why: 'Any instance will do: there is no affinity.' },
+      { a: ['r', 'c'], k: 'stats', lbl: 'B delivers the retained frame', badges: [['t-hit', 'RETAINED']], code: 'STATE v41', st: [6, false, 42, true, 'sync', 'B: stats v41'],
+        why: '41 ≤ 42: ignored, no regression. The client already counts as synced on this connection, because it got a frame.' },
+      { a: ['s', 'c'], k: 'stats', lbl: 'Next live frame', code: 'STATE v43', st: [6, true, 43, true, 'sync', 'B: stats v43'], why: 'Applied; B and the client are up to date.' }
+    ]
+  },
+  {
+    id: 'failure', name: 'An instance goes down mid-match',
+    when: 'Instance B stops (deploy, failure). Its clients reconnect through the balancer, which only has A and C alive.',
+    start: [['Instances', 'A, B, C → A, C'], ['Clients on B', 'lose the connection'], ['Upstreams on A and C', 'open, with retained frames'], ['Match', 'continuous plays and goals']],
+    subs: 'reopens on A or C', queries: '0', outcome: 'everyone synced again in ~150 ms',
+    channels: ['score', 'stats'],
+    result: "B's clients land on instances that already have the upstream open and the retained frame, so they recover in <b>~150 ms</b> (measured over 3 runs: 145–163 ms), without waiting for the periodic frame and with no version regression.",
+    tally: [['t-warn', 'instance B down'], ['t-hit', 'retained on A/C'], ['t-query', '0 queries']],
+    steps: [
+      { box: 'r', k: 'err', lbl: 'Instance B stops; the balancer removes it', code: "B's connections closed", st: [6, false, 913, false, 'prov', 'A, C: scoreboard v6 · stats v913'],
+        why: 'The clients keep showing the last state and mark the channels as not synced.' },
+      { a: ['c', 'r'], k: 'score', lbl: 'Reconnect with backoff (100 ms in the test) → A or C', code: 'scoreboardUpdates · statsUpdates', st: [6, false, 913, false, 'prov', 'A, C: scoreboard v6 · stats v913'],
+        why: 'If the balancer picked an instance that is down, it would try the next one.' },
+      { a: ['r', 'c'], k: 'score', lbl: 'A/C deliver the retained frames', badges: [['t-hit', 'RETAINED'], ['t-hit', 'RETAINED']], code: 'STATE v6 · STATE v915', st: [6, true, 915, true, 'sync', 'A, C: scoreboard v6 · stats v915'],
+        why: "If the new instance did not have the upstream open, it would open one and get the subgraph's initial frame (scenario 1)." },
+      { box: 's', k: 'score', lbl: "Subgraph: B's streams go away; A's and C's carry on", code: 'streams = 2 instances × matches × channels', st: [6, true, 915, true, 'sync', 'A, C: scoreboard v6 · stats v915'],
+        why: 'No state has to be migrated between instances: each one gets everything from the subgraph.' }
+    ]
+  },
+  {
+    id: 'identity', name: 'Different identities on the same instance',
+    when: 'Two users with different tokens subscribe to the same match on instance A.',
+    start: [['Instance A', 'key includes authorization'], ['Client 1', 'Bearer a'], ['Client 2', 'Bearer b'], ['Client 3', 'Bearer a']],
+    subs: '2 upstreams (one per token)', queries: '0', outcome: 'no cross-identity retained frame',
+    channels: ['score'],
+    result: 'Different tokens share neither the upstream nor the retained frame. Only the same identity gets the kept frame (test: 2 upstreams; 1 retained delivery, to client 3).',
+    tally: [['t-score', '2 upstreams'], ['t-hit', '1 retained (same token)']],
+    steps: [
+      { a: ['c', 'r'], k: 'score', lbl: 'Client 1 (Bearer a)', code: 'key: Scoreboard + m1 + "Bearer a"', st: [null, false, undefined, false, 'none', 'A[a]: nothing'], why: 'First with this identity: opens the upstream.' },
+      { a: ['s', 'c'], k: 'score', lbl: "The subgraph's initial frame", code: 'STATE v6', st: [6, true, undefined, false, 'sync', 'A[a]: scoreboard v6'], why: '' },
+      { a: ['c', 'r'], k: 'score', lbl: 'Client 2 (Bearer b)', code: 'key: Scoreboard + m1 + "Bearer b"', st: [6, true, undefined, false, 'sync', 'A[a]: v6 · A[b]: nothing'],
+        why: 'Another key: another upstream, and the retained frame of "a" is not delivered to "b". In production, authorization must also be enforced on the subgraph.' },
+      { a: ['c', 'r'], k: 'score', lbl: 'Client 3 (Bearer a)', badges: [['t-hit', 'RETAINED']], code: 'same key as client 1 → STATE v6 right away', st: [6, true, undefined, false, 'sync', 'A[a]: v6 · A[b]: v6'], why: 'Same identity: shares the upstream and gets the retained frame.' }
+    ]
+  },
+  {
+    id: 'cleanup', name: 'The last subscriber leaves',
+    when: "The match ends and an instance's clients close the screen.",
+    start: [['Instance A', 'm1 upstreams open'], ['Retained on A', 'scoreboard v9 · stats v2104'], ['Subscribers on A', '1 → 0'], ['Match', 'finished']],
+    subs: 'closes the upstreams', queries: '0', outcome: 'nothing is kept',
+    channels: ['score', 'stats'],
+    result: 'The retained frames live inside the upstream. When the last subscriber leaves, both go away, and nothing is kept for finished matches. Whoever opens the match later falls into scenario 1.',
+    tally: [['t-db', '0 upstreams'], ['t-db', '0 retained']],
+    steps: [
+      { box: 'c', k: 'score', lbl: 'The last m1 client on A closes the screen', code: 'connection closed', st: [9, true, 2104, true, 'sync', 'A: scoreboard v9 · stats v2104'], why: '' },
+      { box: 'r', k: 'score', lbl: 'A closes the upstreams with no subscribers and drops the retained frames', code: 'upstreams 0 · retained 0', st: [9, true, 2104, true, 'sync', 'A: nothing kept'],
+        why: 'In the cleanup test, after everyone leaves, no instance keeps an upstream or a retained frame.' },
+      { box: 's', k: 'db', lbl: "Hubs with no subscribers stop the match's timers", code: 'streams on the subgraph: 0', st: [9, true, 2104, true, 'sync', 'A: nothing kept'], why: '' }
+    ]
+  }
+];
+
+const screenText = { none: 'Empty screen', prov: 'Showing the last known state (not synced)', sync: 'Everything synced' };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+document.getElementById('summary').innerHTML = scenarios.map((s, i) => `<tr>
+  <td><a href="#${s.id}">${i + 1}. ${esc(s.name)}</a></td><td>${esc(s.when)}</td><td>${esc(s.subs)}</td><td>${esc(s.queries)}</td><td>${esc(s.outcome)}</td></tr>`).join('');
+document.getElementById('jump').innerHTML = scenarios.map((s, i) => `<a href="#${s.id}">${i + 1}. ${esc(s.name)}</a>`).join('');
+
+function stepHTML(step, i) {
+  const badges = step.badges ? `<div class="badges">${step.badges.map(([c, t]) => `<span class="tag ${c}">${esc(t)}</span>`).join('')}</div>` : '';
+  const row = `grid-row:${i + 2}`;
+  let body;
+  if (step.box) {
+    body = `<div class="cell" style="${row};grid-column:${L[step.box]}"><div class="box k-${step.k}"><span class="t">${esc(step.lbl)}</span>${step.code ? `<span class="code">${esc(step.code)}</span>` : ''}${badges}</div></div>`;
+  } else {
+    const [from, to] = step.a.map(x => L[x]);
+    const lo = Math.min(from, to), hi = Math.max(from, to);
+    body = `<div class="cell arrow k-${step.k} ${from < to ? 'right' : 'left'} ${step.dash ? 'dash' : ''}" style="${row};grid-column:${lo} / ${hi + 1};--n:${hi - lo + 1}">
+      <span class="lbl">${esc(step.lbl)}</span><span class="line"></span><span class="code">${esc(step.code)}</span>${badges}</div>`;
+  }
+  return `<div class="step" data-i="${i}">
+    <div class="row-bg" style="${row}"></div><div class="n" style="${row}" tabindex="0" role="button" aria-label="Step ${i + 1}: ${esc(step.lbl)}">${i + 1}</div>${body}</div>`;
+}
+
+function chanHTML(cls, title, version, synced, subscribed) {
+  if (!subscribed) return `<dl class="chan ${cls} off"><b>${title}</b><dt>status</dt><dd>not subscribed on this screen</dd></dl>`;
+  return `<dl class="chan ${cls}"><b>${title}</b><dt>version</dt><dd>${version === null ? '—' : version}</dd><dt>synced</dt><dd>${synced ? 'true' : 'false'}</dd></dl>`;
+}
+
+function render(s, idx) {
+  const el = document.createElement('section');
+  el.className = 'scen'; el.id = s.id;
+  el.innerHTML = `
+    <div class="scen-head"><h2>${idx + 1}. ${esc(s.name)}</h2><p class="when">${esc(s.when)}</p></div>
+    <div class="start">${s.start.map(([k, v]) => `<span>${esc(k)}: <b>${esc(v)}</b></span>`).join('')}</div>
+    <div class="cols">
+      <div class="diagram"><div class="lanes">
+        <div class="lane-h" style="grid-row:1;grid-column:1"></div>
+        <div class="lane-h" style="grid-row:1;grid-column:2">Client<small>StateSync</small></div>
+        <div class="lane-h" style="grid-row:1;grid-column:3">Balancer + instances<small>dedup + retention per instance</small></div>
+        <div class="lane-h" style="grid-row:1;grid-column:4">Subgraphs<small>scores · stats</small></div>
+        ${s.steps.map(stepHTML).join('')}
+      </div></div>
+      <aside class="panel" aria-live="polite">
+        <h3>Client state</h3>
+        <div class="stepname"></div>
+        <div class="chans"></div>
+        <div class="retained"></div>
+        <div class="screen"></div>
+        <p class="why"></p>
+        <div class="controls">
+          <button type="button" id="prev-${s.id}" data-act="prev">← Previous</button>
+          <button type="button" id="next-${s.id}" data-act="next">Next →</button>
+          <button type="button" id="play-${s.id}" data-act="play">Play</button>
+        </div>
+      </aside>
+    </div>
+    <div class="result"><div class="tally">${s.tally.map(([c, t]) => `<span class="tag ${c}">${esc(t)}</span>`).join('')}</div><p>${s.result}</p></div>`;
+  document.getElementById('scenarios').appendChild(el);
+
+  let cur = 0, timer = null;
+  const steps = [...el.querySelectorAll('.step')];
+  const panel = el.querySelector('.panel');
+  const playBtn = el.querySelector('[data-act="play"]');
+  const hasStats = s.channels.includes('stats'), hasScore = s.channels.includes('score');
+  function select(i) {
+    cur = Math.max(0, Math.min(s.steps.length - 1, i));
+    steps.forEach((x, j) => x.classList.toggle('sel', j === cur));
+    const [pv, ps, ev, es, screen, retained] = s.steps[cur].st;
+    panel.querySelector('.stepname').innerHTML = `<b>After step ${cur + 1}</b> of ${s.steps.length}: ${esc(s.steps[cur].lbl)}`;
+    panel.querySelector('.chans').innerHTML = chanHTML('c-score', 'Scoreboard', pv, ps, hasScore) + chanHTML('c-stats', 'Stats', ev, es, hasStats);
+    panel.querySelector('.retained').innerHTML = `<span class="tag t-hit">retained frame</span> <span>${esc(retained)}</span>`;
+    const box = panel.querySelector('.screen');
+    box.className = `screen s-${screen}`; box.textContent = screenText[screen];
+    panel.querySelector('.why').textContent = s.steps[cur].why || '';
+  }
+  function stop() { clearInterval(timer); timer = null; playBtn.textContent = 'Play'; }
+  steps.forEach((x, j) => {
+    x.addEventListener('click', () => { stop(); select(j); });
+    x.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); stop(); select(j); } });
+  });
+  el.querySelector('[data-act="prev"]').addEventListener('click', () => { stop(); select(cur - 1); });
+  el.querySelector('[data-act="next"]').addEventListener('click', () => { stop(); select(cur + 1); });
+  playBtn.addEventListener('click', () => {
+    if (timer) return stop();
+    if (cur >= s.steps.length - 1) select(0);
+    playBtn.textContent = 'Pause';
+    timer = setInterval(() => { if (cur >= s.steps.length - 1) return stop(); select(cur + 1); }, 1700);
+  });
+  select(0);
+}
+scenarios.forEach(render);
+</script>
+
+</body>
+</html>

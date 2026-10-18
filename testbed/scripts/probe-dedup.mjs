@@ -7,13 +7,14 @@ import { startSubgraphs } from '../subgraphs/app.mjs';
 import { composeSupergraph } from './compose.mjs';
 import { transports } from '../client/transport.mjs';
 
-// Sonda: N clientes simultâneos na mesma partida, numa instância só; quantos upstreams o
-// Router abre no subgraph, logo depois e alguns segundos depois. MODE=passthrough|callback,
-// CLIENTS, TRIALS, RETAIN_ENABLED=false. Exige APOLLO_KEY/APOLLO_GRAPH_REF.
+// Probe: N simultaneous clients on the same match, on a single instance; how many upstreams the
+// Router opens on the subgraph, right after and a few seconds later. MODE=passthrough|callback,
+// CLIENTS, TRIALS, RETAIN_ENABLED=false. Requires APOLLO_KEY/APOLLO_GRAPH_REF.
 //   MODE=passthrough CLIENTS=8 TRIALS=6 node scripts/probe-dedup.mjs
 const mode = process.env.MODE ?? 'passthrough'; const trials = Number(process.env.TRIALS ?? 8); const n = Number(process.env.CLIENTS ?? 4);
-if (!process.env.APOLLO_KEY || !process.env.APOLLO_GRAPH_REF) { console.error('Defina APOLLO_KEY e APOLLO_GRAPH_REF no ambiente.'); process.exit(2); }
-// Raiz do repositório: o crate do plugin e examples/router/.
+if (!process.env.APOLLO_KEY || !process.env.APOLLO_GRAPH_REF) { console.error('Set APOLLO_KEY and APOLLO_GRAPH_REF in the environment.'); process.exit(2); }
+// Repository root: the plugin crate and examples/router/.
+
 const root = new URL('../..', import.meta.url).pathname;
 const dir = mkdtempSync(join(tmpdir(), 'probe-'));
 const app = await startSubgraphs({ dataDir: dir, host: '127.0.0.1', ports: { scores: 0, catalog: 0, stats: 0 }, scoreboard: { periodicMs: 3000 } });

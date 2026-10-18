@@ -1,248 +1,248 @@
-# Validação realizada
+# Validation performed
 
-Ambiente: Linux, Node.js 22.22.0, Hive Gateway 2.15.2, Docker 29.8; apollo-router
-**2.18.0** com o plugin (Rust 1.97.1) e a imagem oficial v2.18.0. As seções abaixo
-desta foram medidas com a 2.10.5, antes da atualização, e foram refeitas na 2.18.0
-com os mesmos resultados (próxima seção).
+Environment: Linux, Node.js 22.22.0, Hive Gateway 2.15.2, Docker 29.8; apollo-router
+**2.18.0** with the plugin (Rust 1.97.1) and the official v2.18.0 image. The
+sections below this one were measured with 2.10.5, before the upgrade, and were
+redone on 2.18.0 with the same results (next section).
 
-O plugin se chamava `poc.retain_last_frame`, com a marca `extensions.retainedFrame`,
-na pasta `router-plugin/`. Foi renomeado para `subscription_snapshot`, com a marca
-`extensions.snapshot`, na pasta `router-subscription-snapshot/`, sem mudar o
-comportamento. Os resultados abaixo valem para o mesmo código. Depois, o crate foi
-para a raiz do repositório (lib + bin) e o resto da POC para `testbed/`; os caminhos
-abaixo são os da época.
+The plugin used to be called `poc.retain_last_frame`, with the `extensions.retainedFrame`
+marker, in the `router-plugin/` directory. It was renamed to `subscription_snapshot`,
+with the `extensions.snapshot` marker, in the `router-subscription-snapshot/`
+directory, without changing its behavior. The results below hold for the same code.
+Later, the crate moved to the repository root (lib + bin) and the rest of the POC
+to `testbed/`; the paths below are the ones from that time.
 
-## Atualização para a 2.18.0
+## Upgrade to 2.18.0
 
-- **Plugin:** compila sem mudar o código (`cargo build --release --locked`).
-- **Testes do plugin:** os 8 de unidade e os 4 no pipeline do Router passam. O
-  cliente que entra depois recebe o estado em 1 ms com retenção e em 2.797 ms sem.
-- **`npm test`:** 44 aprovados.
-- **Configs:** `router config validate` aceita as três configs migradas, tanto no
-  binário com o plugin quanto na imagem oficial v2.18.0 (`router.yaml`).
-  `router config upgrade` não aponta mais nada.
-- **Imagem Docker** do plugin (`rust:1.97.1-bookworm`): compila.
-- **Router licenciado** (`npm run test:router-real`, 3 instâncias + 1 sem plugin):
-  passou nos dois modos.
+- **Plugin:** compiles without code changes (`cargo build --release --locked`).
+- **Plugin tests:** the 8 unit tests and the 4 in the Router pipeline pass. The
+  late-joining client gets the state in 1 ms with retention and in 2,797 ms without.
+- **`npm test`:** 44 passed.
+- **Configs:** `router config validate` accepts the three migrated configs, both in
+  the binary with the plugin and in the official v2.18.0 image (`router.yaml`).
+  `router config upgrade` no longer reports anything.
+- **The plugin's Docker image** (`rust:1.97.1-bookworm`): builds.
+- **Licensed Router** (`npm run test:router-real`, 3 instances + 1 without the plugin):
+  passed in both modes.
 
 | | passthrough | callback |
 | --- | --- | --- |
-| Deduplicação (24 clientes, 2 partidas) | 3 streams por canal e partida | 3 |
-| Late joiner com o plugin | 5–6 ms | 10–12 ms |
-| Late joiner sem o plugin | ~2.840 ms¹ | ~2.843 ms |
-| Instância derrubada | 8 reconectaram, 144 ms | 8, 158 ms |
-| Ciclo de vida (agendada, FULL_TIME com 7 clientes, depois do fim, LIVE antigo) | tudo certo, 0 reconexões | igual |
+| Deduplication (24 clients, 2 matches) | 3 streams per channel and match | 3 |
+| Late joiner with the plugin | 5–6 ms | 10–12 ms |
+| Late joiner without the plugin | ~2,840 ms¹ | ~2,843 ms |
+| Instance taken down | 8 reconnected, 144 ms | 8, 158 ms |
+| Lifecycle (scheduled, FULL_TIME with 7 clients, after the end, stale LIVE) | all good, 0 reconnects | same |
 
-¹ Numa das três rodadas sem plugin o cliente recebeu o estado em 9 ms. É o mesmo
-desvio já registrado no modo callback na 2.10.5, agora visto no passthrough. A
-causa não foi investigada.
+¹ In one of the three runs without the plugin the client got the state in 9 ms. It
+is the same deviation already recorded in callback mode on 2.10.5, now seen in
+passthrough. The cause was not investigated.
 
 
-## Testes (`npm test`: 44 aprovados)
+## Tests (`npm test`: 44 passed)
 
 - **`tests/domain.test.mjs` (8):**
-  - patches e a propriedade de sobreposição (usados no modo `delta` dos
-    experimentos);
-  - versão só quando o estado muda;
-  - atomicidade sem publicação e persistência;
-  - `SnapshotCache` com `minVersion`;
-  - relógio derivado no cliente;
-  - estatísticas como valores finais.
+  - patches and the overlap property (used in the experiments' `delta` mode);
+  - a version only when the state changes;
+  - atomicity without publishing, and persistence;
+  - `SnapshotCache` with `minVersion`;
+  - clock derived on the client;
+  - stats as final values.
 - **`tests/channels.test.mjs` (10):**
-  - `STATE` imediato, periódico, e só o mais novo para quem está lento;
-  - **limitador:** lance isolado sai na hora; 100 commits em ~100 ms viram no
-    máximo 3 frames, com o estado final; `committedAt` é o do commit mais antigo
-    ainda não enviado;
-  - liberação de listeners e timers;
-  - modo `delta`, usado nos experimentos de comparação.
+  - immediate `STATE`, periodic, and only the newest for a slow consumer;
+  - **limiter:** an isolated play goes out right away; 100 commits in ~100 ms
+    become at most 3 frames, with the final state; `committedAt` is that of the
+    oldest commit not yet sent;
+  - releasing listeners and timers;
+  - `delta` mode, used in the comparison experiments.
 - **`tests/sync.test.mjs` (6):**
-  - late joiner certo no primeiro frame;
-  - estatísticas convertidas do formato da API;
-  - frames repetidos, atrasados, fora de ordem ou retidos mais velhos ignorados;
-  - render provisório;
-  - nova tentativa após falha da base;
-  - **teste de propriedade:** 25 sementes, 3 instâncias com frames retidos de
-    idades diferentes, clientes trocando de instância, frames perdidos,
-    duplicados e reordenados. A versão nunca regride e todos terminam no estado
-    exato. Injetar um bug (aceitar frame mais velho) o faz falhar na semente 1.
-- **`tests/experiments.test.mjs` (2):** banda e isolamento das cinco políticas
-  de estatísticas (números em `docs/design.md`).
-- **`tests/e2e.test.mjs` (4), com o processo real do Hive Gateway:**
-  - cenário completo (`scripts/verify.mjs`) pelo edge: caches antigos, um stream
-    por canal, rajada com gol no meio, cliente só de placar com 0 B de
-    estatísticas, **retomada sem nenhuma query** e todos iguais ao banco;
-  - o mesmo cenário direto no Hive;
-  - upstreams por canal e partida;
-  - reinício dos subgraphs.
-- **`tests/scale.test.mjs` (5), com 3 edges atrás de um balanceador:**
+  - late joiner right on the first frame;
+  - stats converted from the API format;
+  - repeated, late, out-of-order or older retained frames ignored;
+  - provisional render;
+  - retry after a failed base fetch;
+  - **property test:** 25 seeds, 3 instances with retained frames of different
+    ages, clients switching instances, lost, duplicated and reordered frames. The
+    version never goes back and everyone ends on the exact state. Injecting a bug
+    (accepting an older frame) makes it fail on seed 1.
+- **`tests/experiments.test.mjs` (2):** bandwidth and isolation of the five stats
+  policies (numbers in `docs/design.md`).
+- **`tests/e2e.test.mjs` (4), with the real Hive Gateway process:**
+  - full scenario (`scripts/verify.mjs`) through the edge: stale caches, one stream
+    per channel, a burst with a goal in the middle, a scoreboard-only client with 0 B
+    of stats, **resuming without any query** and everyone equal to the database;
+  - the same scenario directly on Hive;
+  - upstreams per channel and match;
+  - subgraph restart.
+- **`tests/scale.test.mjs` (5), with 3 edges behind a balancer:**
 
-| Teste | Resultado |
+| Test | Result |
 | --- | --- |
-| 30 clientes, 2 partidas, 2 canais | 6 streams por canal no subgraph (3 instâncias × 2 partidas); máximo 1 upstream por partida em cada instância |
-| Late joiner numa partida parada (periódico de 2 s) | **12 ms com retenção**, 1.997 ms sem |
-| Identidade na chave (`authorization`) | tokens diferentes: 2 upstreams; só o cliente com o mesmo token recebeu o frame retido |
-| Instância derrubada no meio do jogo (12 clientes, lances e gols contínuos) | 8 clientes migraram pelo balanceador; todos sincronizados de novo em **145–163 ms** (3 rodadas); nenhuma versão regrediu; estado final exato |
-| Limpeza | sem assinantes, nenhuma instância guarda upstream nem frame retido; subgraph sem streams |
+| 30 clients, 2 matches, 2 channels | 6 streams per channel on the subgraph (3 instances × 2 matches); at most 1 upstream per match on each instance |
+| Late joiner on an idle match (periodic 2 s) | **12 ms with retention**, 1,997 ms without |
+| Identity in the key (`authorization`) | different tokens: 2 upstreams; only the client with the same token got the retained frame |
+| Instance taken down mid-match (12 clients, continuous plays and goals) | 8 clients moved through the balancer; everyone synced again in **145–163 ms** (3 runs); no version went back; exact final state |
+| Cleanup | with no subscribers, no instance keeps an upstream or a retained frame; subgraph without streams |
 
-- **`tests/router-scale.test.mjs` (1):** o roteiro `scripts/verify-router-scale.mjs`,
-  feito para os Routers com o plugin, contra o emulador (3 edges + 1 sem
-  retenção), para provar o próprio roteiro antes de rodá-lo com a licença:
-  6 streams por canal para 24 clientes (3 instâncias × 2 partidas); late joiner
-  em 4–7 ms com frame retido contra ~1.850 ms sem; 2 upstreams para 2 tokens;
-  12 clientes com uma instância derrubada, 8 migraram e todos voltaram em 146 ms,
-  sem regressão; limpeza.
+- **`tests/router-scale.test.mjs` (1):** the `scripts/verify-router-scale.mjs` script,
+  written for the Routers with the plugin, against the emulator (3 edges + 1
+  without retention), to prove the script itself before running it with the
+  license: 6 streams per channel for 24 clients (3 instances × 2 matches); late
+  joiner in 4–7 ms with a retained frame versus ~1,850 ms without; 2 upstreams for
+  2 tokens; 12 clients with an instance taken down, 8 moved and everyone was back
+  in 146 ms, without regression; cleanup.
 
-## Apollo Router de verdade com GraphOS (`npm run test:router-real`)
+## The real Apollo Router with GraphOS (`npm run test:router-real`)
 
-O binário de `router-subscription-snapshot/` (2.10.5 + plugin) com uma chave do GraphOS (plano
-gratuito, graph só de teste): 3 instâncias com retenção atrás do balanceador e 1
-sem, contra os subgraphs Node, frame periódico de 3 s. Clientes em HTTP multipart
-(o único transporte de subscription do Router para clientes). Só as subscriptions
-passaram pelos routers; nenhuma bateu no limite do plano gratuito. Rodou nos dois
-modos de subscription entre Router e subgraphs:
+The binary from `router-subscription-snapshot/` (2.10.5 + plugin) with a GraphOS key
+(free plan, test-only graph): 3 instances with retention behind the balancer and 1
+without, against the Node subgraphs, periodic 3 s frame. Clients over HTTP multipart
+(the Router's only subscription transport for clients). Only the subscriptions
+went through the routers; none hit the free plan limit. It ran in both
+subscription modes between Router and subgraphs:
 
-| Verificação | passthrough (WebSocket) | callback (HTTP, `MODE=callback`) |
+| Check | passthrough (WebSocket) | callback (HTTP, `MODE=callback`) |
 | --- | --- | --- |
-| Deduplicação: 24 clientes, 2 partidas | 3 streams por canal e partida (um por instância)¹ | 3 streams por canal e partida |
-| Late joiner com o plugin | **4–7 ms**, frame retido nas 3 rodadas | **4–10 ms**, frame retido nas 3 rodadas |
-| Late joiner sem o plugin | **2.834–2.839 ms** (periódico) | **2.837–2.847 ms** (periódico) |
-| Identidade | 2 streams para 2 tokens; só o mesmo token recebe o frame retido | igual |
-| Instância derrubada (SIGKILL) com 12 clientes | 8 reconectaram; todos de volta em **142 ms**; sem regressão; estado igual ao banco | 8 reconectaram; **143 ms**; igual |
-| Limpeza | sem streams no subgraph | sem streams no subgraph (o subgraph para no 404 do Router) |
+| Deduplication: 24 clients, 2 matches | 3 streams per channel and match (one per instance)¹ | 3 streams per channel and match |
+| Late joiner with the plugin | **4–7 ms**, retained frame in all 3 runs | **4–10 ms**, retained frame in all 3 runs |
+| Late joiner without the plugin | **2,834–2,839 ms** (periodic) | **2,837–2,847 ms** (periodic) |
+| Identity | 2 streams for 2 tokens; only the same token gets the retained frame | same |
+| Instance taken down (SIGKILL) with 12 clients | 8 reconnected; everyone back in **142 ms**; no regression; state equal to the database | 8 reconnected; **143 ms**; same |
+| Cleanup | no streams on the subgraph | no streams on the subgraph (the subgraph stops on the Router's 404) |
 
-**Ciclo de vida no Router de verdade** (etapa 5 do roteiro, janela de início de
-2 s; mesmo resultado nos dois modos):
+**Lifecycle on the real Router** (step 5 of the script, 2 s kickoff window; same
+result in both modes):
 
-| Verificação | passthrough | callback |
+| Check | passthrough | callback |
 | --- | --- | --- |
-| Partida encerrada | fase `over`, 0 subscriptions | igual |
-| Agendada | 0 streams antes da janela; assinou 23 ms depois dela; apito pelo stream | 0 streams; 25 ms |
-| `FULL_TIME` com 7 clientes deduplicados pelo balanceador | 1 stream por canal no subgraph; todos encerrados em 9 ms; 0 reconexões; upstreams fechados | 13 ms; 0 reconexões |
-| Subscription depois do fim | só o frame `FULL_TIME` do subgraph, 0 frames retidos, e o stream termina | igual |
-| Query antiga dizendo `LIVE` (cache simulado no cliente) | fases `live` → `over` em 9 ms, 0 reconexões | 16 ms |
+| Finished match | `over` phase, 0 subscriptions | same |
+| Scheduled | 0 streams before the window; subscribed 23 ms after it; kickoff through the stream | 0 streams; 25 ms |
+| `FULL_TIME` with 7 clients deduplicated through the balancer | 1 stream per channel on the subgraph; all ended in 9 ms; 0 reconnects; upstreams closed | 13 ms; 0 reconnects |
+| Subscription after the end | only the subgraph's `FULL_TIME` frame, 0 retained frames, and the stream ends | same |
+| Stale query saying `LIVE` (cache simulated on the client) | phases `live` → `over` in 9 ms, 0 reconnects | 16 ms |
 
-**Duas medições fora do padrão, uma vez cada, no modo callback** (6 execuções do
-roteiro nesse modo): numa delas a recuperação após derrubar uma instância levou
-5.005 ms (nas outras, 140–144 ms; 5 s é o watchdog do cliente para stream parado),
-e um late joiner **sem** o plugin recebeu o estado em 10 ms em vez de ~2,8 s. Não
-se repetiram em duas execuções seguidas. A causa não foi investigada; o 10 ms
-combina com o upstream duplicado da deduplicação (que entrega o frame inicial na
-hora), mas o roteiro não mede os upstreams nessa etapa.
+**Two out-of-pattern measurements, once each, in callback mode** (6 runs of the
+script in that mode): in one of them recovery after taking an instance down took
+5,005 ms (140–144 ms in the others; 5 s is the client's watchdog for a stalled
+stream), and a late joiner **without** the plugin got the state in 10 ms instead of
+~2.8 s. They did not repeat in two runs in a row. The cause was not investigated;
+the 10 ms matches the duplicated upstream from deduplication (which delivers the
+initial frame right away), but the script does not measure upstreams in that step.
 
-¹ **Deduplicação do Router sob concorrência (passthrough):** numa das execuções
-uma instância abriu 2 upstreams para a mesma partida (4 em vez de 3). A sonda
-`scripts/probe-dedup.mjs` (8 clientes simultâneos numa instância) reproduziu em
-1 de 6 rodadas, e em 2 de 12 **com o plugin desligado**, ou seja, vem do Router;
-o upstream extra continua aberto. No modo callback, 0 de 6. Não afeta a correção
-(os dois upstreams entregam os mesmos frames e o cliente fica com a maior
-versão), só a eficiência. O roteiro registra `upstreamsExtras` e só reprova se
-não houver deduplicação.
+¹ **Router deduplication under concurrency (passthrough):** in one of the runs an
+instance opened 2 upstreams for the same match (4 instead of 3). The probe
+`scripts/probe-dedup.mjs` (8 simultaneous clients on one instance) reproduced it in
+1 of 6 rounds, and in 2 of 12 **with the plugin off**, so it comes from the Router;
+the extra upstream stays open. In callback mode, 0 of 6. It does not affect
+correctness (both upstreams deliver the same frames and the client keeps the
+highest version), only efficiency. The script records `extraUpstreams` and only
+fails if there is no deduplication.
 
-- **`tests/lifecycle.test.mjs` (7), 3 execuções seguidas:** o ciclo de vida da
-  partida pelo edge, com o cache de queries no pior caso (nunca expira) e janela de
-  1 s:
-  - regras com relógio fixo: fase por horário e status; TTL do `SCHEDULED` limitado
-    pela janela, verificado como propriedade em todo instante antes dela;
-  - `Cache-Control` real do subgraph: 300 s longe, ≤ o tempo até a janela perto,
-    2 s na janela, 3600 s no `FULL_TIME`;
-  - encerrada: 1 query por canal, 0 subscriptions;
-  - agendada com `SCHEDULED` antigo no cache: 0 streams antes da janela, assinou
-    menos de 500 ms depois dela; jogo atrasado segue assinando; `FULL_TIME` fecha
-    os dois canais sem reconexão;
-  - cache antigo dizendo `LIVE`: o primeiro frame traz `FULL_TIME` e tudo fecha em
-    menos de 1 s;
-  - 5 clientes deduplicados: o `FULL_TIME` encerra todos e o upstream fecha.
+- **`tests/lifecycle.test.mjs` (7), 3 runs in a row:** the match lifecycle
+  through the edge, with the worst-case query cache (never expires) and a 1 s
+  window:
+  - rules with a fixed clock: phase by time and status; the `SCHEDULED` TTL capped
+    by the window, checked as a property at every instant before it;
+  - the subgraph's real `Cache-Control`: 300 s when far, ≤ the time to the window
+    when close, 2 s in the window, 3600 s at `FULL_TIME`;
+  - finished: 1 query per channel, 0 subscriptions;
+  - scheduled with a stale `SCHEDULED` in the cache: 0 streams before the window,
+    subscribed less than 500 ms after it; a delayed match keeps subscribing;
+    `FULL_TIME` closes both channels without reconnecting;
+  - stale cache saying `LIVE`: the first frame brings `FULL_TIME` and everything
+    closes in less than 1 s;
+  - 5 deduplicated clients: `FULL_TIME` ends all of them and the upstream closes.
 
-  **Mutações conferidas:** tirar o teto do TTL do `SCHEDULED` reprova 2 testes;
-  decidir só pelo status (ignorando o horário) reprova 4, inclusive o de cache
-  antigo.
-- **`tests/callback.test.mjs` (1):** o protocolo callback/1.0 do lado do
-  subgraph, contra um `/callback` falso: `check` antes de responder
-  `{ data: null }`, frames como `next`, e um 404 do Router fecha o stream sem
-  `complete`. Esse teste achou um `complete` indevido depois do 404, corrigido.
+  **Mutations checked:** removing the `SCHEDULED` TTL cap fails 2 tests;
+  deciding by status only (ignoring the time) fails 4, including the stale cache one.
+- **`tests/callback.test.mjs` (1):** the callback/1.0 protocol on the subgraph
+  side, against a fake `/callback`: `check` before answering `{ data: null }`,
+  frames as `next`, and a 404 from the Router closes the stream without
+  `complete`. This test found a wrong `complete` after the 404, since fixed.
 
-## Plugin do Router (raiz do repositório, `globo.subscription_snapshot`)
+## Router plugin (repository root, `globo.subscription_snapshot`)
 
-- **`cargo test --release` (8):** inclui a liberação no fim do stream; o marcador passa intacto; o primeiro assinante
-  não recebe frame retido e alimenta o store; o late joiner recebe o retido logo
-  depois do marcador, com `subscribed` aberto, e depois os eventos ao vivo;
-  chaves diferentes não compartilham; erros e o item final não são retidos; a
-  entrada some quando o último assinante sai; respostas que não são subscription
-  aberta passam intactas; a chave inclui variáveis e identidade.
-- **`npm run test:router-harness` (4):** o quarto teste, `FULL_TIME` no
-  pipeline do Router: os dois clientes deduplicados recebem o frame final e o
-  multipart fecha; o upstream fecha; quem chega depois recebe o estado final do
-  subgraph e o stream termina. Esse teste achou um problema no plugin: a entrada
-  retida só saía quando o cliente era descartado, não quando o stream terminava,
-  e um cliente novo recebia o frame de um upstream já fechado. Corrigido (a entrada
-  sai no item final ou no fim do stream), com teste de unidade.
-- **`npm run test:router-harness` (3 primeiros), 3 execuções seguidas:** o plugin no
-  pipeline do Router pelo `TestHarness` do crate (router service, deduplicação,
-  passthrough `graphql_ws` para os subgraphs Node, multipart), frame periódico de
-  3 s:
+- **`cargo test --release` (8):** includes releasing at the end of the stream; the
+  marker passes through untouched; the first subscriber gets no retained frame and
+  feeds the store; the late joiner gets the retained frame right after the marker,
+  with `subscribed` open, and then the live events; different keys do not share;
+  errors and the final item are not retained; the entry goes away when the last
+  subscriber leaves; responses that are not an open subscription pass through
+  untouched; the key includes variables and identity.
+- **`npm run test:router-harness` (4):** the fourth test, `FULL_TIME` in the Router
+  pipeline: both deduplicated clients get the final frame and the multipart
+  closes; the upstream closes; a client arriving later gets the subgraph's final
+  state and the stream ends. This test found a problem in the plugin: the retained
+  entry only went away when the client was dropped, not when the stream ended, and
+  a new client got the frame of an already closed upstream. Fixed (the entry goes
+  away on the final item or at the end of the stream), with a unit test.
+- **`npm run test:router-harness` (first 3), 3 runs in a row:** the plugin in the
+  Router pipeline through the crate's `TestHarness` (router service,
+  deduplication, `graphql_ws` passthrough to the Node subgraphs, multipart),
+  periodic 3 s frame:
 
-| Teste | Resultado |
+| Test | Result |
 | --- | --- |
-| Deduplicação e retenção | 1 stream no subgraph para 2 clientes; late joiner em **1 ms** com `extensions.snapshot`, na mesma versão do primeiro; os dois recebem o gol seguinte; sem assinantes, o upstream fecha |
-| Sem retenção (`enabled: false`) | late joiner em **2.799 ms**, esperando o periódico |
-| Identidade | `authorization` diferente: 2 upstreams, e só o cliente com o mesmo token recebe o frame retido |
+| Deduplication and retention | 1 stream on the subgraph for 2 clients; late joiner in **1 ms** with `extensions.snapshot`, at the same version as the first; both get the next goal; with no subscribers, the upstream closes |
+| Without retention (`enabled: false`) | late joiner in **2,799 ms**, waiting for the periodic frame |
+| Identity | different `authorization`: 2 upstreams, and only the client with the same token gets the retained frame |
 
-  **Mutação conferida:** inserir o frame retido antes do marcador faz dois testes
-  falharem; o late joiner recebe `{"data":null}` e o frame se perde.
-- **Binário:** `cargo build --release` gera `target/release/router` (2.10.5).
-  `router config validate router/router-plugin.yaml` passa, com e sem
-  `RETAIN_ENABLED`; um campo desconhecido no plugin é rejeitado pelo schema.
-- **Sem chave**, o binário para na inicialização: `license violation ...
-  ["Federated subscriptions"]`, como esperado. Com uma chave inválida de
-  propósito, o GraphOS responde `ACCESS_DENIED`: o binário no host alcança o
-  uplink pelo proxy da sessão. `npm run test:router-real` falha nesse ponto com
-  a mensagem do Router, sem deixar processos.
-- **Imagem Docker** (`router-subscription-snapshot/Dockerfile`, na época com Rust 1.97): compila e
-  `config validate` passa dentro dela. O perfil `apollo-plugin` sobe todos os
-  serviços, mas aqui, sem proxy nos containers, os routers ficam tentando buscar
-  a licença (`fetch failed from all 2 uplink endpoints`) e não abrem a porta. Por
-  isso o teste real na sessão é o `test:router-real`, com o binário no host.
-- **Limite do plano gratuito**, lido no código do Router 2.10.5: `RateLimit` por
-  instância no router service, 503 `ROUTER_FREE_PLAN_RATE_LIMIT_REACHED`. O
-  roteiro passa só as subscriptions pelos routers e para com essa mensagem se o
-  limite for atingido.
+  **Mutation checked:** inserting the retained frame before the marker makes two
+  tests fail; the late joiner gets `{"data":null}` and the frame is lost.
+- **Binary:** `cargo build --release` produces `target/release/router` (2.10.5).
+  `router config validate router/router-plugin.yaml` passes, with and without
+  `RETAIN_ENABLED`; an unknown field in the plugin is rejected by the schema.
+- **Without a key**, the binary stops at startup: `license violation ...
+  ["Federated subscriptions"]`, as expected. With a deliberately invalid key,
+  GraphOS answers `ACCESS_DENIED`: the binary on the host reaches the uplink
+  through the session proxy. `npm run test:router-real` fails at that point with
+  the Router's message, without leaving processes behind.
+- **Docker image** (`router-subscription-snapshot/Dockerfile`, with Rust 1.97 at the
+  time): builds, and `config validate` passes inside it. The `apollo-plugin` profile
+  starts every service, but here, without a proxy in the containers, the routers
+  keep trying to fetch the license (`fetch failed from all 2 uplink endpoints`) and
+  do not open the port. That is why the real test in the session is
+  `test:router-real`, with the binary on the host.
+- **Free plan limit**, read in the Router 2.10.5 code: a per-instance `RateLimit`
+  in the router service, 503 `ROUTER_FREE_PLAN_RATE_LIMIT_REACHED`. The script only
+  sends the subscriptions through the routers and stops with that message if the
+  limit is reached.
 
 ## Benchmark (`npm run bench`, 10 s)
 
-100 clientes só de placar + 50 com os dois canais; 20 lances/s com uma rajada
-de 200 lances/s; um gol a cada 2 s; o jogo já em andamento (400 lances antes).
+100 scoreboard-only clients + 50 with both channels; 20 plays/s with a burst of
+200 plays/s; a goal every 2 s; the match already in progress (400 plays before).
 
-| | 1 instância | 3 instâncias (`EDGES=3`) |
+| | 1 instance | 3 instances (`EDGES=3`) |
 | --- | --- | --- |
-| Convergiram | 150/150 | 150/150 |
-| Placar p50 / p99 | 10 / 19 ms | 14 / 21 ms |
-| Estatísticas p50 / p99 | 478 / 512 ms | 482 / 505 ms |
-| Streams no subgraph por canal | 1 | 3 |
-| Entradas servidas com frame retido | 169 | 184 (61 + 62 + 61) |
-| Snapshots durante o jogo | 0 | 0 |
-| Cliente só de placar | 443 B/s, 0 de estatísticas | 471 B/s, 0 de estatísticas |
-| Cliente com os dois canais | + 4.441 B/s de estatísticas | + 4.433 B/s |
+| Converged | 150/150 | 150/150 |
+| Scoreboard p50 / p99 | 10 / 19 ms | 14 / 21 ms |
+| Stats p50 / p99 | 478 / 512 ms | 482 / 505 ms |
+| Streams on the subgraph per channel | 1 | 3 |
+| Joins served with a retained frame | 169 | 184 (61 + 62 + 61) |
+| Snapshots during the match | 0 | 0 |
+| Scoreboard-only client | 443 B/s, 0 of stats | 471 B/s, 0 of stats |
+| Client with both channels | + 4,441 B/s of stats | + 4,433 B/s |
 
-Na versão anterior, com patch adaptativo, o cliente completo recebia ~2.423 B/s
-de estatísticas no mesmo benchmark. O estado inteiro custa ~1,8× em banda aqui.
+In the previous version, with the adaptive patch, the full client got ~2,423 B/s
+of stats in the same benchmark. The full state costs ~1.8× in bandwidth here.
 
-## Docker e Router
+## Docker and Router
 
-- Compose (subgraphs com simulador + Hive + edge com retenção) com o código
-  atual: `scripts/verify.mjs` contra `localhost:4010` passou, e `npm run client`
-  mostrou placar e estatísticas ao vivo, com 3 entradas servidas por frame
-  retido. `RETAIN=0` desliga a retenção.
-- `router config validate router/router.yaml` com a imagem oficial 2.10.0:
-  válido.
+- Compose (subgraphs with the simulator + Hive + edge with retention) with the
+  current code: `scripts/verify.mjs` against `localhost:4010` passed, and
+  `npm run client` showed live scoreboard and stats, with 3 joins served by a
+  retained frame. `RETAIN=0` turns retention off.
+- `router config validate router/router.yaml` with the official 2.10.0 image:
+  valid.
 
-## Não verificado
+## Not verified
 
-- **Response cache com Redis** (`--profile apollo`) com o Router licenciado.
-- **A causa exata do upstream duplicado** na deduplicação passthrough do Router
-  (ver acima); seria um caso para reportar à Apollo.
-- **O perfil `apollo-plugin` do compose com a chave:** os containers não alcançam
-  o GraphOS nesta sessão; o mesmo cenário rodou com os binários no host.
-- **Balanceador real** (ALB, NGINX, Envoy): o do teste é um round-robin simples
-  com streaming. Num LB real, confira o timeout de ociosidade (maior que o frame
-  periódico) e que as respostas multipart não são bufferizadas.
-- **Réplicas dos subgraphs com bus.**
+- **Response cache with Redis** (`--profile apollo`) with the licensed Router.
+- **The exact cause of the duplicated upstream** in the Router's passthrough
+  deduplication (see above); it would be a case to report to Apollo.
+- **The compose `apollo-plugin` profile with the key:** the containers cannot reach
+  GraphOS in this session; the same scenario ran with the binaries on the host.
+- **A real balancer** (ALB, NGINX, Envoy): the one in the test is a simple
+  round-robin with streaming. On a real LB, check the idle timeout (larger than the
+  periodic frame) and that multipart responses are not buffered.
+- **Subgraph replicas with a bus.**

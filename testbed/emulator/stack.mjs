@@ -13,10 +13,10 @@ const freePort = () => new Promise(resolve => {
   const server = createServer().listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolve(port)); });
 });
 
-// Subgraphs no processo do teste (para inspecionar métricas) + Hive Gateway real
-// como processo separado + edges (dedup, retenção e cache, ver edge.mjs) na frente
-// do gateway. Com edgeCount > 1, um balanceador round-robin na frente dos edges
-// simula várias instâncias do Router; o cache de queries é compartilhado (Redis).
+// Subgraphs in the test process (to inspect metrics) + the real Hive Gateway
+// as a separate process + edges (dedup, retention and cache, see edge.mjs) in front
+// of the gateway. With edgeCount > 1, a round-robin balancer in front of the edges
+// simulates several Router instances; the query cache is shared (Redis).
 export async function startStack({ edge: edgeOptions = {}, edgeCount = 1, ...options } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'realtime-stack-'));
   const config = { dataDir: dir, ports: { scores: 0, catalog: 0, stats: 0 }, host: '127.0.0.1', ...options };
@@ -55,14 +55,15 @@ export async function startStack({ edge: edgeOptions = {}, edgeCount = 1, ...opt
       if (edgeCount > 1) balancer = await startBalancer({ targets: edges.map(e => e.url) });
       return {
         url, edge: edges[0], edges, balancer, get subgraphs() { return subgraphs; }, stop, logs: () => logs,
-        // Derruba uma instância de edge (como um Router que cai): os clientes dela reconectam pelo balanceador.
+        // Takes an edge instance down (like a crashing Router): its clients reconnect through the balancer.
         async killEdge(i) { balancer?.remove(edges[i].url); await edges[i].close(); },
-        // Simula deploy/crash do subgraph mantendo banco e portas.
+        // Simulates a subgraph deploy/crash, keeping the database and ports.
         async restartSubgraphs() { await subgraphs.close(); subgraphs = await startSubgraphs(config); }
       };
     }
     await delay(100);
   }
   await stop();
-  throw new Error(`Gateway não iniciou:\n${logs}`);
+  throw new Error(`Gateway did not start:\n${logs}`
+);
 }

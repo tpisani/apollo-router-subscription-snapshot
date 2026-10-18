@@ -1,16 +1,16 @@
 import { createSync, runSync, isFinalScoreboard } from './sync.mjs';
 import { matchPhase, LIVE_LEAD_MS } from '../subgraphs/sports.mjs';
 
-// Ciclo de vida de uma tela de partida: query ou subscription conforme o horário e
-// o status.
-//   1. Query do placar (minVersion 0, possivelmente do cache) e uma por canal extra.
-//   2. FULL_TIME: estado final, nenhuma subscription.
-//   3. SCHEDULED antes de kickoff − lead: só a query; agenda a subscription para
-//      kickoff − lead. Um SCHEDULED antigo no cache não atrasa nada: o horário decide.
-//   4. Na janela, ao vivo ou no intervalo: subscription em todos os canais. Se o
-//      cache disse LIVE mas a partida já acabou, o primeiro frame traz FULL_TIME.
-//   5. Frame FULL_TIME: o subgraph encerra o placar; o cliente fecha os outros canais.
-// api(channel): { snapshot(min) }   connect(channel, signal): frames do canal
+// Lifecycle of a match screen: query or subscription depending on the time and
+// the status.
+//   1. Scoreboard query (minVersion 0, possibly from the cache) and one per extra channel.
+//   2. FULL_TIME: final state, no subscription.
+//   3. SCHEDULED before kickoff − lead: query only; schedules the subscription for
+//      kickoff − lead. An old SCHEDULED in the cache delays nothing: the clock decides.
+//   4. Inside the window, live or at half time: subscription on every channel. If the
+//      cache said LIVE but the match is already over, the first frame brings FULL_TIME.
+//   5. FULL_TIME frame: the subgraph ends the scoreboard; the client closes the other channels.
+// api(channel): { snapshot(min) }   connect(channel, signal): the channel's frames
 export function watchMatch({ matchId, channels = ['scoreboard', 'stats'], api, connect, now = Date.now, lead = LIVE_LEAD_MS,
   signal, onUpdate = () => {}, onPhase = () => {}, onError = () => {}, runOptions = {} }) {
   const syncs = Object.fromEntries(channels.map(channel => [channel, createSync(channel, { matchId, api: api(channel) })]));
@@ -33,7 +33,8 @@ export function watchMatch({ matchId, channels = ['scoreboard', 'stats'], api, c
       connect: sessionSignal => connect(channel, sessionSignal),
       onUpdate: view => onUpdate(channel, view),
       isFinal: channel === 'scoreboard' ? isFinalScoreboard : () => false });
-    // O fim do placar encerra a partida inteira: os outros canais param junto.
+    // The end of the scoreboard ends the whole match: the other channels stop with it.
+
     return channel === 'scoreboard' ? run.then(() => { if (isFinalScoreboard(syncs.scoreboard.state)) { setPhase('over'); live.abort(); } }) : run;
   }));
 

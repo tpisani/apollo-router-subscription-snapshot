@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sync scenarios</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a live broadcast protocol guide. Each scenario is a swimlane diagram
+   (Client · Router · Subgraphs) with clickable steps and a panel with the state of the
+   client's two channels (scoreboard and stats) after each step. */
+:root {
+  --bg: #f3f6f4; --surface: #ffffff; --ink: #16211c; --muted: #53635b; --line: #d2dcd6; --soft: #e8eeea;
+  --score: #1f50b8; --score-bg: #e5ecfa;
+  --stats: #a54a12; --stats-bg: #fbeadf;
+  --query: #6d36a8; --query-bg: #f0e8f9;
+  --hit: #7a5a00; --hit-bg: #fbf0c8;
+  --db: #1b6e4a; --db-bg: #ddf1e6;
+  --warn: #ad321b; --warn-bg: #fae5df;
+  --sel: #fffbe6;
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d1311; --surface: #141c19; --ink: #e2e9e5; --muted: #97a69e; --line: #29362f; --soft: #1b2521;
+  --score: #88a9ff; --score-bg: #1a2540; --stats: #f2a06a; --stats-bg: #3a2414;
+  --query: #caa3f2; --query-bg: #2a1d3b; --hit: #f0cf6a; --hit-bg: #3a3112;
+  --db: #6ccf9f; --db-bg: #12301f; --warn: #ff8f78; --warn-bg: #3b1a14;
+  --sel: #232a1c; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0d1311; --surface: #141c19; --ink: #e2e9e5; --muted: #97a69e; --line: #29362f; --soft: #1b2521;
+  --score: #88a9ff; --score-bg: #1a2540; --stats: #f2a06a; --stats-bg: #3a2414;
+  --query: #caa3f2; --query-bg: #2a1d3b; --hit: #f0cf6a; --hit-bg: #3a3112;
+  --db: #6ccf9f; --db-bg: #12301f; --warn: #ff8f78; --warn-bg: #3b1a14;
+  --sel: #232a1c; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--f-body); }
+.wrap { max-width: 1120px; margin: 0 auto; padding-block: 28px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 600; text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(28px, 4vw, 38px); }
+h2 { font-size: 24px; }
+h3 { font-size: 15px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+p { margin: 0; max-width: 70ch; }
+code, .mono { font-family: var(--f-mono); font-size: 12.5px; }
+.lede { color: var(--muted); margin-top: 10px; font-size: 16px; }
+header.top { display: grid; gap: 6px; margin-bottom: 26px; }
+
+.scoreline { display: inline-flex; align-items: center; gap: 10px; font: 600 15px var(--f-display); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; width: fit-content; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.scoreline .clock { font: 500 13px var(--f-mono); color: var(--muted); }
+
+.channels { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.channel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 8px; min-width: 0; border-top: 3px solid var(--c); }
+.channel.c-score { --c: var(--score); }
+.channel.c-stats { --c: var(--stats); }
+.channel h2 { font-size: 20px; }
+.channel dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13.5px; }
+.channel dt { color: var(--muted); }
+.channel dd { margin: 0; }
+.pieces { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 22px; }
+.piece { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.piece .k { font-family: var(--f-mono); font-size: 12.5px; word-break: break-word; }
+.piece p { font-size: 13.5px; color: var(--muted); }
+.tag { display: inline-flex; align-items: center; gap: 6px; font: 500 11px/1 var(--f-body); letter-spacing: .05em; text-transform: uppercase; padding: 4px 7px; border-radius: 4px; width: fit-content; }
+.t-score { color: var(--score); background: var(--score-bg); }
+.t-stats { color: var(--stats); background: var(--stats-bg); }
+.t-query { color: var(--query); background: var(--query-bg); }
+.t-hit { color: var(--hit); background: var(--hit-bg); }
+.t-db { color: var(--db); background: var(--db-bg); }
+.t-warn { color: var(--warn); background: var(--warn-bg); }
+.t-miss { color: var(--muted); background: var(--soft); }
+
+.tablebox { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 18px; }
+table { border-collapse: collapse; width: 100%; min-width: 780px; font-size: 13.5px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 500; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+tr:last-child td { border-bottom: 0; }
+td a { color: var(--ink); font-weight: 600; text-decoration-color: var(--line); text-underline-offset: 3px; }
+
+nav.jump { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 10px; display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+@media (max-width: 700px) { nav.jump { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; } nav.jump a { white-space: nowrap; flex: none; } }
+nav.jump a { font-size: 13px; color: var(--ink); text-decoration: none; padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+nav.jump a:hover, nav.jump a:focus-visible { border-color: var(--score); outline: none; }
+
+section.scen { padding-top: 34px; display: grid; gap: 14px; scroll-margin-top: 60px; }
+.scen-head { display: grid; gap: 6px; }
+.when { color: var(--muted); }
+.start { display: flex; flex-wrap: wrap; gap: 8px; }
+.start span { font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; }
+.start b { font-weight: 600; }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 14px; align-items: start; }
+@media (max-width: 860px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+
+.diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; }
+.lanes { --num: 34px; min-width: 620px; display: grid; grid-template-columns: var(--num) repeat(3, minmax(0, 1fr)); position: relative;
+  background-image: linear-gradient(var(--line), var(--line)), linear-gradient(var(--line), var(--line)), linear-gradient(var(--line), var(--line));
+  background-size: 1px 100%; background-repeat: no-repeat;
+  background-position: calc(var(--num) + (100% - var(--num)) / 6) 0, calc(var(--num) + (100% - var(--num)) / 2) 0, calc(var(--num) + 5 * (100% - var(--num)) / 6) 0; }
+.lane-h { position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--line); padding: 10px 6px; text-align: center; font: 600 13px/1.2 var(--f-display); }
+.lane-h small { display: block; font: 400 11.5px/1.3 var(--f-body); color: var(--muted); }
+.step { display: contents; }
+.step > * { cursor: pointer; }
+.n { grid-column: 1; position: relative; z-index: 1; display: grid; place-items: start center; padding-top: 14px; font: 500 12px var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.cell { padding: 10px 8px; position: relative; z-index: 1; min-width: 0; }
+.row-bg { grid-column: 1 / -1; z-index: 0; }
+.step.sel .row-bg { background: var(--sel); box-shadow: inset 3px 0 0 var(--score); }
+.step:hover .row-bg { background: var(--soft); }
+.step.sel:hover .row-bg { background: var(--sel); }
+
+.arrow { --n: 1; padding-inline: calc(50% / var(--n)); display: grid; gap: 3px; }
+.arrow .lbl { font-size: 13px; text-align: center; line-height: 1.35; }
+.arrow .line { height: 2px; position: relative; background: currentColor; }
+.arrow.dash .line { background: repeating-linear-gradient(90deg, currentColor 0 7px, transparent 7px 12px); }
+.arrow .line::after { content: ""; position: absolute; top: -5px; border: 6px solid transparent; }
+.arrow.right .line::after { right: -2px; border-left: 9px solid currentColor; border-right: 0; }
+.arrow.left .line::after { left: -2px; border-right: 9px solid currentColor; border-left: 0; }
+.arrow .code { font-family: var(--f-mono); font-size: 11.5px; color: var(--ink); text-align: center; word-break: break-word; }
+.arrow .badges, .box .badges { display: flex; justify-content: center; gap: 4px; flex-wrap: wrap; }
+.k-score { color: var(--score); }
+.k-stats { color: var(--stats); }
+.k-query { color: var(--query); }
+.k-db { color: var(--db); }
+.k-err { color: var(--warn); }
+.box { border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 7px 9px; font-size: 13px; display: grid; gap: 4px; }
+.box.k-db { border-color: color-mix(in srgb, var(--db) 45%, var(--line)); }
+.box.k-err { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.box.k-score { border-color: color-mix(in srgb, var(--score) 45%, var(--line)); }
+.box.k-stats { border-color: color-mix(in srgb, var(--stats) 45%, var(--line)); }
+.box .t { color: var(--ink); }
+.box .code { font-family: var(--f-mono); font-size: 11.5px; color: var(--muted); word-break: break-word; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 12px; position: sticky; top: 64px; }
+@media (max-width: 860px) { .panel { position: static; } }
+.panel .stepname { font-size: 13.5px; }
+.chan { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: baseline; font-size: 13.5px; padding: 8px 10px; border-radius: 6px; background: var(--bg); border-left: 3px solid var(--c); }
+.chan.c-score { --c: var(--score); } .chan.c-stats { --c: var(--stats); }
+.chan.off { opacity: .55; }
+.chan b { font-weight: 600; grid-column: 1 / -1; }
+.chan dt { color: var(--muted); } .chan dd { margin: 0; font: 13px var(--f-mono); font-variant-numeric: tabular-nums; }
+.screen { border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.s-none { background: var(--soft); color: var(--muted); }
+.s-prov { background: var(--hit-bg); color: var(--hit); }
+.s-catch { background: var(--query-bg); color: var(--query); }
+.s-sync { background: var(--db-bg); color: var(--db); }
+.panel .why { font-size: 13.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; }
+.controls { display: flex; gap: 6px; flex-wrap: wrap; }
+button { font: 500 13px var(--f-body); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+button:hover { border-color: var(--score); }
+button:focus-visible, .n:focus-visible { outline: 2px solid var(--score); outline-offset: -2px; }
+.tally { display: flex; flex-wrap: wrap; gap: 6px; }
+.result { font-size: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; display: grid; gap: 6px; }
+.result b { font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 16px; font-size: 13px; color: var(--muted); margin: 0 0 18px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 22px; height: 2px; background: currentColor; display: inline-block; }
+.sw.dash { background: repeating-linear-gradient(90deg, currentColor 0 5px, transparent 5px 8px); }
+footer { margin-top: 40px; color: var(--muted); font-size: 13px; }
+@media (prefers-reduced-motion: no-preference) { .step .row-bg { transition: background .15s; } }
+</style>
+
+<style>body { margin: 0; } :root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); } [hidden] { display: none !important; } .banner { font-size: 13.5px; background: var(--hit-bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; } .banner a { color: inherit; }</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <p class="banner">Previous design (commit <code>9a87874</code>): stats with <code>DELTA</code> and a recovery snapshot. The current design, with full state and retention, is in <a href="retention.html">retention.html</a>.</p>
+    <h3>apollo-router-subscription-snapshot · branch claude/realtime-push-feed</h3>
+    <h1>Sync scenarios: scoreboard and stats</h1>
+    <p class="lede">How each screen reaches the current state of a match, with the Router's subscription deduplication and caching on queries. Scoreboard and stats are separate channels, each with its own subscription, version, snapshot and sending style. Click a step to see the state of both channels after it, or use <b>Play</b>.</p>
+    <div class="scoreline" aria-label="Sample match">Atlético Serrano <span>1 × 0</span> União Litoral <span class="clock">2nd H · 63:12</span></div>
+  </header>
+
+  <div class="channels">
+    <div class="channel c-score">
+      <span class="tag t-score">scoreboard channel · scores subgraph</span>
+      <h2>scoreboardUpdates(matchId)</h2>
+      <dl>
+        <dt>Changes</dt><dd>a few times per match: goal, kickoff, half time, end</dd>
+        <dt>Frame</dt><dd><b>STATE</b> with the full scoreboard (~150 B), right at each commit and every 1 s</dd>
+        <dt>Rule</dt><dd>the frame with the highest version wins; there is never a gap to recover</dd>
+        <dt>Clock</dt><dd>not sent: the client advances it from <code>seconds</code> and <code>updatedAt</code></dd>
+      </dl>
+    </div>
+    <div class="channel c-stats">
+      <span class="tag t-stats">stats channel · stats subgraph</span>
+      <h2>statsUpdates(matchId)</h2>
+      <dl>
+        <dt>Changes</dt><dd>~20 plays/s, bursts of 200/s</dd>
+        <dt>Frame</dt><dd>one every 500 ms: <b>DELTA</b> (final values of what changed) or <b>STATE</b> (full state), whichever is smaller; <b>CHECKPOINT</b> every 1 s</dd>
+        <dt>Rule</dt><dd>applies a DELTA if <code>from ≤ local version &lt; version</code>; otherwise, asks for a snapshot with a minimum version</dd>
+        <dt>History</dt><dd>does not exist: recovery is always a snapshot</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="pieces">
+    <div class="piece"><span class="tag t-query">query · cache 2 s / 60 s</span><div class="k">scoreboard(matchId, minVersion)</div>
+      <p>"A consistent scoreboard at some version ≥ minVersion." With 0, it is the shared key for the immediate render.</p></div>
+    <div class="piece"><span class="tag t-query">query · cache 5 s / 60 s</span><div class="k">matchStats(matchId, minVersion)</div>
+      <p>Same contract. With <code>minVersion = v</code> coming from the stream, it is a new key that no old response satisfies.</p></div>
+    <div class="piece"><span class="tag t-query">query · cache 1 h</span><div class="k">match(id) { home away players }</div>
+      <p>Teams and squads in the catalog subgraph. They do not change during the match, so they stay outside the live channels.</p></div>
+  </div>
+
+  <div class="legend" aria-label="Legend">
+    <span class="k-score"><i class="sw"></i>scoreboard</span>
+    <span class="k-stats"><i class="sw"></i>stats</span>
+    <span class="k-query"><i class="sw"></i>query</span>
+    <span class="k-query"><i class="sw dash"></i>response</span>
+    <span><span class="tag t-hit">HIT</span> Router cache</span>
+    <span><span class="tag t-miss">MISS</span> went to the subgraph</span>
+    <span><span class="tag t-db">database</span> commit or read</span>
+  </div>
+
+  <div class="tablebox">
+    <table>
+      <thead><tr><th>Scenario</th><th>When it happens</th><th>Subscriptions</th><th>Queries</th><th>Outcome</th></tr></thead>
+      <tbody id="summary"></tbody>
+    </table>
+  </div>
+
+  <nav class="jump" id="jump" aria-label="Scenarios"></nav>
+  <div id="scenarios"></div>
+
+  <footer>Sample numbers: match <code>m1</code>; 500 ms stats window, periodic frames every 1 s, 5 s watchdog. Measurements cited: <code>npm run bench</code> and <code>tests/experiments.test.mjs</code> on the branch. Code: <code>src/channels.mjs</code>, <code>client/sync.mjs</code>, <code>src/patch.mjs</code>.</footer>
+</div>
+
+<script>
+const L = { c: 2, r: 3, s: 4 };
+// st: [scoreboard version, scoreboard synced, stats version, stats synced, screen]
+// version null = no state; undefined on a channel = the client does not subscribe to that channel.
+const scenarios = [
+  {
+    id: 'list', name: 'Match list joins (scoreboard only)',
+    when: 'A match list screen opens during the match. The scoreboard stream is already open for other clients.',
+    start: [['Cache: scoreboard', 'version 2 (before the goal)'], ['Scoreboard in the database', 'version 3, 1 × 0'], ['Scoreboard stream', 'open (dedup)'], ['Client', 'no state']],
+    subs: 'scoreboard', queries: '1 (base, from the cache)', outcome: 'right on the first frame, no recovery',
+    channels: ['score'],
+    result: 'Synced with <b>1 subscription</b> and <b>1 query from the cache</b>. The first scoreboard frame already carries the full state: there is no recovery query on this channel.',
+    tally: [['t-score', '1 subscription'], ['t-hit', 'base HIT'], ['t-query', '0 recoveries'], ['t-stats', '0 B of stats']],
+    steps: [
+      { a: ['c', 'r'], k: 'score', lbl: 'Opens the scoreboard subscription', code: 'scoreboardUpdates(matchId: "m1")', st: [null, false, undefined, false, 'none'],
+        why: 'The list does not subscribe to stats: none of their bytes reach this client (measured: 0 B in the benchmark).' },
+      { box: 'r', k: 'score', lbl: 'Deduplication: joins the scoreboard upstream that already exists', code: 'nothing goes to the subgraph', st: [null, false, undefined, false, 'none'],
+        why: 'Same operation and same variables as the other clients. One upstream per channel and match, for everyone.' },
+      { a: ['c', 'r'], k: 'query', lbl: 'Asks for the shared base (in parallel)', code: 'scoreboard(matchId: "m1", minVersion: 0)', st: [null, false, undefined, false, 'none'],
+        why: 'Only to draw the screen right away. It may be stale, and that is fine.' },
+      { a: ['r', 'c'], k: 'query', dash: true, lbl: 'Answers from the cache: version 2 (0 × 0)', badges: [['t-hit', 'HIT']], code: '{ version: 2, state: { home: 0, away: 0 } }', st: [2, false, undefined, false, 'prov'],
+        why: 'Provisional scoreboard: consistent, but from before the goal.' },
+      { a: ['s', 'c'], k: 'score', lbl: 'First frame (periodic, within 1 s)', code: 'STATE version 3 { home: 1, away: 0 }', st: [3, true, undefined, false, 'sync'],
+        why: 'The frame carries the full scoreboard with version 3 > 2: it replaces and becomes synced. If the frame had a lower version than the base, it would be ignored.' }
+    ]
+  },
+  {
+    id: 'match', name: 'Match screen joins (scoreboard + stats)',
+    when: 'The full screen opens with stale caches on both channels. Both streams are already open.',
+    start: [['Cache: scoreboard', 'version 2'], ['Cache: matchStats', 'version 30'], ['In the database', 'scoreboard 3, stats 40'], ['Client', 'no state']],
+    subs: 'scoreboard + stats', queries: '2 bases from the cache + 1 stats snapshot', outcome: 'scoreboard on the 1st frame; stats with 1 snapshot',
+    channels: ['score', 'stats'],
+    result: 'Two independent channels. The scoreboard is right on the first frame; the stats need <b>one snapshot with a minimum version</b>, because the cached base was too old for the first DELTA.',
+    tally: [['t-score', 'scoreboard: 0 recoveries'], ['t-stats', 'stats: 1 snapshot'], ['t-hit', '2 bases HIT']],
+    steps: [
+      { a: ['c', 'r'], k: 'score', lbl: 'Scoreboard subscription', code: 'scoreboardUpdates(matchId: "m1")', st: [null, false, null, false, 'none'], why: 'Joins the deduplicated scoreboard upstream.' },
+      { a: ['c', 'r'], k: 'stats', lbl: 'Stats subscription', code: 'statsUpdates(matchId: "m1")', st: [null, false, null, false, 'none'], why: 'Another operation, another deduplicated upstream. A GraphQL subscription has a single root field.' },
+      { a: ['r', 'c'], k: 'query', dash: true, lbl: 'Both bases come from the cache', badges: [['t-hit', 'HIT'], ['t-hit', 'HIT']], code: 'scoreboard v2 · matchStats v30', st: [2, false, 30, false, 'prov'],
+        why: 'The screen draws scoreboard and stats right away, as provisional.' },
+      { a: ['s', 'c'], k: 'score', lbl: 'Scoreboard frame', code: 'STATE version 3', st: [3, true, 30, false, 'prov'],
+        why: 'Scoreboard synced. It does not depend on what happens to the stats.' },
+      { a: ['s', 'c'], k: 'stats', lbl: 'First stats frame', code: 'DELTA from 38 → version 40', st: [3, true, 30, false, 'catch'],
+        why: 'The window starts at 38, after the local version (30): 31…38 are missing. Without history, the way out is a snapshot.' },
+      { a: ['c', 'r'], k: 'query', lbl: 'Snapshot with a minimum version', code: 'matchStats(matchId: "m1", minVersion: 40)', st: [3, true, 30, false, 'catch'],
+        why: 'A new key. Other clients joining now get the same frame and ask for the same key.' },
+      { a: ['r', 's'], k: 'query', lbl: 'First time for this key', badges: [['t-miss', 'MISS']], code: 'matchStats(…, minVersion: 40)', st: [3, true, 30, false, 'catch'], why: '' },
+      { a: ['s', 'c'], k: 'query', dash: true, lbl: 'Stats at version 41 (≥ 40)', code: 'Cache-Control: public, max-age=60', st: [3, true, 41, true, 'sync'],
+        why: 'The client checks version ≥ 40 and replaces the state. The next DELTA (from 40 → 44) covers 41: it is applied normally.' }
+    ]
+  },
+  {
+    id: 'goal', name: 'Live goal',
+    when: 'Normal scoreboard path: the client is synced and a goal is scored.',
+    start: [['Client', 'scoreboard v3, synced'], ['Scoreboard in the database', 'version 3'], ['Scoreboard stream', 'open (dedup)'], ['Clock', '63:12, running']],
+    subs: 'already open', queries: '0', outcome: 'goal on screen in ~10 ms',
+    channels: ['score', 'stats'],
+    result: 'The goal arrives and is applied <b>without any query</b>. Measured in the benchmark, with 150 clients and a stats burst in the middle: p50 10 ms, p99 20 ms.',
+    tally: [['t-score', '1 frame'], ['t-query', '0 queries']],
+    steps: [
+      { box: 's', k: 'db', lbl: 'scores: scoreGoal (AWAY) → scoreboard 1 × 1, version 4', code: 'BEGIN IMMEDIATE … COMMIT', st: [3, true, 41, true, 'sync'],
+        why: 'State and version in the same transaction; published only after COMMIT.' },
+      { box: 's', k: 'score', lbl: 'The scoreboard hub sends right away, without waiting for a window', code: 'STATE version 4 { home: 1, away: 1, lastEvent: GOAL 63\' }', st: [3, true, 41, true, 'sync'],
+        why: 'One frame per match, not per client. The scoreboard does not group: each commit is urgent and rare.' },
+      { a: ['s', 'r'], k: 'score', lbl: 'One frame through the upstream (graphql-ws)', code: 'STATE version 4', st: [3, true, 41, true, 'sync'], why: '' },
+      { box: 'r', k: 'score', lbl: "Fans out to every scoreboard client of the match", code: 'multipart, one part per client', st: [3, true, 41, true, 'sync'],
+        why: 'The match list and the match screen get the same frame.' },
+      { a: ['r', 'c'], k: 'score', lbl: 'Frame arrives', code: 'STATE version 4', st: [4, true, 41, true, 'sync'],
+        why: 'Version 4 > 3: replaces. The clock keeps advancing on the client, without messages every second.' }
+    ]
+  },
+  {
+    id: 'stats', name: 'Stats in a normal game',
+    when: 'Normal stats path: ~10 plays in a 500 ms window.',
+    start: [['Client', 'stats v41, synced'], ['Pace', '~20 plays/s'], ['Stats stream', 'open (dedup)'], ['Window', '500 ms']],
+    subs: 'already open', queries: '0', outcome: '10 commits become 1 frame',
+    channels: ['score', 'stats'],
+    result: '10 commits become <b>one frame</b> with only the changed fields, applied without a query. In the benchmark, 614 plays became 30 frames.',
+    tally: [['t-stats', '1 DELTA'], ['t-query', '0 queries']],
+    steps: [
+      { box: 's', k: 'db', lbl: 'stats: 10 plays, versions 42 to 51 (each batch is a commit)', code: 'recordStats(...) → increments become final values', st: [4, true, 41, true, 'sync'],
+        why: 'Ingestion arrives as increments ("+1 pass"); the state stores and publishes final values ("passes: 212").' },
+      { box: 's', k: 'stats', lbl: 'The hub groups the window: keeps the last value of each field', code: '{ path: [home, passes], value: 212 } …', st: [4, true, 41, true, 'sync'],
+        why: 'The patch size is bounded by the number of fields, not of plays.' },
+      { box: 's', k: 'stats', lbl: 'End of the window: the patch is smaller than the state → DELTA', code: 'DELTA from 41 → version 51', st: [4, true, 41, true, 'sync'],
+        why: 'On every window the hub compares both and sends the smaller one.' },
+      { a: ['s', 'c'], k: 'stats', lbl: "One frame for every subscriber of the match", code: 'DELTA from 41 → version 51, ~15 fields', st: [4, true, 51, true, 'sync'],
+        why: 'from 41 ≤ local version 41 < 51: applies and moves to 51. Maximum delay ≈ the window (measured: p50 508 ms).' },
+      { a: ['s', 'c'], k: 'stats', dash: true, lbl: 'Periodic checkpoint', code: 'CHECKPOINT version 51', st: [51, true, 51, true, 'sync'],
+        why: "Reports how far the stream has delivered, not the database head. A play still in the window does not make the client think it missed something." }
+    ]
+  },
+  {
+    id: 'burst', name: 'Stats burst with a goal in the middle',
+    when: 'An attack with 200 plays/s for 3 s; a goal is scored in the middle of the burst.',
+    start: [['Client', 'scoreboard v4 · stats v51'], ['Pace', '200 plays/s'], ['Link', 'poor mobile, 16 KB/s'], ['Window', '500 ms']],
+    subs: 'already open', queries: '0', outcome: 'goal without delay; stats as full state',
+    channels: ['score', 'stats'],
+    result: 'The goal does not wait for the stats, and the stats go as <b>full state</b>, because in a burst that is smaller than the patch. On a 16 KB/s link, the goal had a p95 of 80 ms; sending stats on every play, it would be 74 s.',
+    tally: [['t-score', 'goal: 1 immediate frame'], ['t-stats', 'STATE instead of DELTA'], ['t-query', '0 queries']],
+    steps: [
+      { box: 's', k: 'db', lbl: 'stats: 100 plays in the window (versions 52 to 151)', code: 'almost every field changes', st: [4, true, 51, true, 'sync'],
+        why: 'When almost everything changes, the {path, value} list gets more verbose than the state itself.' },
+      { box: 's', k: 'db', lbl: 'scores: a goal in the middle of the burst, version 5', code: 'scoreGoal(HOME) → 2 × 1', st: [4, true, 51, true, 'sync'],
+        why: "Another subgraph, another hub, another queue: the scoreboard does not wait for the stats window." },
+      { a: ['s', 'c'], k: 'score', lbl: 'The scoreboard goes out right away', code: 'STATE version 5 { home: 2, away: 1 }', st: [5, true, 51, true, 'sync'],
+        why: 'Measured in the benchmark during the burst: p50 10 ms, p99 20 ms.' },
+      { box: 's', k: 'stats', lbl: 'End of the window: full state smaller than the patch → STATE', code: 'STATE version 151 (~1.5 KB)', st: [5, true, 51, true, 'sync'],
+        why: 'Pick the smaller one per window: in a normal game, patch size; in a burst, state size. Measured: goal p95 80 ms (patch only: 170 ms).' },
+      { a: ['s', 'c'], k: 'stats', lbl: 'Stats frame', code: 'STATE version 151', st: [5, true, 151, true, 'sync'],
+        why: 'STATE replaces everything, without checking for a gap. If the client were slow, this STATE would also drop the DELTAs waiting in its queue.' }
+    ]
+  },
+  {
+    id: 'mid', name: 'Snapshot in the middle of the window',
+    when: 'The client got a stats snapshot while a window was already open on the server.',
+    start: [['Client', 'stats v45 (snapshot)'], ['Window on the server', 'started at 43'], ['Next frame', 'DELTA from 43 → 50'], ['Cache', 'any']],
+    subs: 'already open', queries: '0', outcome: 'DELTA applied even though it starts earlier',
+    channels: ['score', 'stats'],
+    result: "The frame starts before the client's version and is still applied <b>without a query</b>. This works because the patches carry final values, not increments (property test with 500 random windows).",
+    tally: [['t-stats', '1 overlapping DELTA'], ['t-query', '0 queries']],
+    steps: [
+      { box: 'c', k: 'stats', lbl: "The client's state at version 45", code: 'came from matchStats(minVersion: …)', st: [5, true, 45, true, 'sync'],
+        why: "Plays 44 and 45 are already in the client's state." },
+      { a: ['s', 'c'], k: 'stats', lbl: "The window's frame", code: 'DELTA from 43 → version 50', st: [5, true, 45, true, 'sync'],
+        why: 'from 43 ≤ 45 < 50: applicable. The fields changed in 44–45 come with their value at 50, which is the same or newer.' },
+      { box: 'c', k: 'stats', lbl: 'Applies the final values', code: 'result = exact state at version 50', st: [5, true, 50, true, 'sync'],
+        why: 'Applying the same patch twice changes nothing either (idempotent), so duplicate frames are harmless.' }
+    ]
+  },
+  {
+    id: 'drop', name: 'Connection drop and resume',
+    when: 'The network drops for a few seconds, or 5 s pass without any frame (the watchdog considers the connection dead).',
+    start: [['Client', 'scoreboard v5 · stats v151'], ['During the drop', 'scoreboard 6, stats 230'], ['Streams', 'open (dedup)'], ['Cache', 'any']],
+    subs: 'reopens both', queries: '1 stats snapshot', outcome: 'scoreboard on the 1st frame; stats with 1 snapshot',
+    channels: ['score', 'stats'],
+    result: 'The local state is kept. The scoreboard is solved by the next frame; the stats, by <b>one snapshot</b> (at most one, asserted in the end-to-end test). No history is requested.',
+    tally: [['t-score', 'scoreboard: 0 queries'], ['t-stats', 'stats: 1 snapshot']],
+    steps: [
+      { box: 'c', k: 'err', lbl: 'Connection lost', code: 'exponential backoff with jitter', st: [5, false, 151, false, 'prov'],
+        why: 'The screen keeps showing the last state, but both channels are no longer synced.' },
+      { a: ['c', 'r'], k: 'score', lbl: 'Reopens both subscriptions', code: 'scoreboardUpdates · statsUpdates', st: [5, false, 151, false, 'prov'],
+        why: 'They join the deduplicated upstreams again. No base is requested: the client already has state.' },
+      { a: ['s', 'c'], k: 'score', lbl: 'Scoreboard frame', code: 'STATE version 6', st: [6, true, 151, false, 'prov'],
+        why: 'Solved.' },
+      { a: ['s', 'c'], k: 'stats', lbl: 'First stats frame', code: 'CHECKPOINT version 230', st: [6, true, 151, false, 'catch'],
+        why: '230 > 151: the client missed windows during the drop.' },
+      { a: ['c', 'r'], k: 'query', lbl: 'Snapshot with a minimum version', code: 'matchStats(matchId: "m1", minVersion: 230)', badges: [['t-hit', 'HIT'], ['t-miss', 'or MISS']], st: [6, true, 151, false, 'catch'],
+        why: 'If other clients dropped too (a Router restart, for instance), they get the same checkpoint and share this cache key.' },
+      { a: ['r', 'c'], k: 'query', dash: true, lbl: 'Stats at version ≥ 230', code: '{ version: 231, state: … }', st: [6, true, 231, true, 'sync'],
+        why: 'Synced again, without downloading any list of changes.' }
+    ]
+  }
+];
+
+const screenText = { none: 'Empty screen', prov: 'Showing a provisional or pre-drop state', catch: 'Fetching what is missing', sync: 'Everything synced' };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+document.getElementById('summary').innerHTML = scenarios.map((s, i) => `<tr>
+  <td><a href="#${s.id}">${i + 1}. ${esc(s.name)}</a></td><td>${esc(s.when)}</td><td>${esc(s.subs)}</td><td>${esc(s.queries)}</td><td>${esc(s.outcome)}</td></tr>`).join('');
+document.getElementById('jump').innerHTML = scenarios.map((s, i) => `<a href="#${s.id}">${i + 1}. ${esc(s.name)}</a>`).join('');
+
+function stepHTML(step, i) {
+  const badges = step.badges ? `<div class="badges">${step.badges.map(([c, t]) => `<span class="tag ${c}">${esc(t)}</span>`).join('')}</div>` : '';
+  const row = `grid-row:${i + 2}`;
+  let body;
+  if (step.box) {
+    body = `<div class="cell" style="${row};grid-column:${L[step.box]}"><div class="box k-${step.k}"><span class="t">${esc(step.lbl)}</span>${step.code ? `<span class="code">${esc(step.code)}</span>` : ''}${badges}</div></div>`;
+  } else {
+    const [from, to] = step.a.map(x => L[x]);
+    const lo = Math.min(from, to), hi = Math.max(from, to);
+    body = `<div class="cell arrow k-${step.k} ${from < to ? 'right' : 'left'} ${step.dash ? 'dash' : ''}" style="${row};grid-column:${lo} / ${hi + 1};--n:${hi - lo + 1}">
+      <span class="lbl">${esc(step.lbl)}</span><span class="line"></span><span class="code">${esc(step.code)}</span>${badges}</div>`;
+  }
+  return `<div class="step" data-i="${i}">
+    <div class="row-bg" style="${row}"></div><div class="n" style="${row}" tabindex="0" role="button" aria-label="Step ${i + 1}: ${esc(step.lbl)}">${i + 1}</div>${body}</div>`;
+}
+
+function chanHTML(cls, title, version, synced, subscribed) {
+  if (!subscribed) return `<dl class="chan ${cls} off"><b>${title}</b><dt>status</dt><dd>not subscribed on this screen</dd></dl>`;
+  return `<dl class="chan ${cls}"><b>${title}</b><dt>version</dt><dd>${version === null ? '—' : version}</dd><dt>synced</dt><dd>${synced ? 'true' : 'false'}</dd></dl>`;
+}
+
+function render(s, idx) {
+  const el = document.createElement('section');
+  el.className = 'scen'; el.id = s.id;
+  el.innerHTML = `
+    <div class="scen-head"><h2>${idx + 1}. ${esc(s.name)}</h2><p class="when">${esc(s.when)}</p></div>
+    <div class="start">${s.start.map(([k, v]) => `<span>${esc(k)}: <b>${esc(v)}</b></span>`).join('')}</div>
+    <div class="cols">
+      <div class="diagram"><div class="lanes">
+        <div class="lane-h" style="grid-row:1;grid-column:1"></div>
+        <div class="lane-h" style="grid-row:1;grid-column:2">Client<small>StateSync · DeltaSync</small></div>
+        <div class="lane-h" style="grid-row:1;grid-column:3">Apollo Router<small>dedup + response cache</small></div>
+        <div class="lane-h" style="grid-row:1;grid-column:4">Subgraphs<small>scores · stats</small></div>
+        ${s.steps.map(stepHTML).join('')}
+      </div></div>
+      <aside class="panel" aria-live="polite">
+        <h3>Client state</h3>
+        <div class="stepname"></div>
+        <div class="chans"></div>
+        <div class="screen"></div>
+        <p class="why"></p>
+        <div class="controls">
+          <button type="button" id="prev-${s.id}" data-act="prev">← Previous</button>
+          <button type="button" id="next-${s.id}" data-act="next">Next →</button>
+          <button type="button" id="play-${s.id}" data-act="play">Play</button>
+        </div>
+      </aside>
+    </div>
+    <div class="result"><div class="tally">${s.tally.map(([c, t]) => `<span class="tag ${c}">${esc(t)}</span>`).join('')}</div><p>${s.result}</p></div>`;
+  document.getElementById('scenarios').appendChild(el);
+
+  let cur = 0, timer = null;
+  const steps = [...el.querySelectorAll('.step')];
+  const panel = el.querySelector('.panel');
+  const playBtn = el.querySelector('[data-act="play"]');
+  const hasStats = s.channels.includes('stats');
+  function select(i) {
+    cur = Math.max(0, Math.min(s.steps.length - 1, i));
+    steps.forEach((x, j) => x.classList.toggle('sel', j === cur));
+    const [pv, ps, ev, es, screen] = s.steps[cur].st;
+    panel.querySelector('.stepname').innerHTML = `<b>After step ${cur + 1}</b> of ${s.steps.length}: ${esc(s.steps[cur].lbl)}`;
+    panel.querySelector('.chans').innerHTML = chanHTML('c-score', 'Scoreboard', pv, ps, true) + chanHTML('c-stats', 'Stats', ev, es, hasStats);
+    const box = panel.querySelector('.screen');
+    box.className = `screen s-${screen}`; box.textContent = screenText[screen];
+    panel.querySelector('.why').textContent = s.steps[cur].why || '';
+  }
+  function stop() { clearInterval(timer); timer = null; playBtn.textContent = 'Play'; }
+  steps.forEach((x, j) => {
+    x.addEventListener('click', () => { stop(); select(j); });
+    x.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); stop(); select(j); } });
+  });
+  el.querySelector('[data-act="prev"]').addEventListener('click', () => { stop(); select(cur - 1); });
+  el.querySelector('[data-act="next"]').addEventListener('click', () => { stop(); select(cur + 1); });
+  playBtn.addEventListener('click', () => {
+    if (timer) return stop();
+    if (cur >= s.steps.length - 1) select(0);
+    playBtn.textContent = 'Pause';
+    timer = setInterval(() => { if (cur >= s.steps.length - 1) return stop(); select(cur + 1); }, 1700);
+  });
+  select(0);
+}
+scenarios.forEach(render);
+</script>
+
+</body>
+</html>

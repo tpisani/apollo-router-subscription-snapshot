@@ -5,9 +5,9 @@ export class SyncError extends Error {
   constructor(message, code) { super(message); this.code = code; }
 }
 
-// Um documento versionado por partida: o estado atual e um contador. Sem log de
-// eventos: quem precisa recuperar pede um snapshot com versão mínima.
-// Cada subgraph tem o seu Store (placar e estatísticas não compartilham banco).
+// One versioned document per match: the current state and a counter. No event
+// log: whoever needs to recover asks for a snapshot with a minimum version.
+// Each subgraph has its own Store (scoreboard and stats do not share a database).
 export class Store {
   constructor(path = ':memory:', { initial, onCommit = () => {}, clock = Date.now } = {}) {
     this.db = new DatabaseSync(path);
@@ -25,7 +25,7 @@ export class Store {
   }
 
   #check(key) {
-    if (typeof key !== 'string' || !key || key.length > 100) throw new SyncError('Partida inválida', 'BAD_USER_INPUT');
+    if (typeof key !== 'string' || !key || key.length > 100) throw new SyncError('Invalid match', 'BAD_USER_INPUT');
   }
 
   read(key) {
@@ -36,8 +36,8 @@ export class Store {
 
   version(key) { return this.read(key).version; }
 
-  // mutate recebe uma cópia do estado e a altera. Versão + estado na mesma
-  // transação; o patch (valores finais) é calculado aqui e publicado após o COMMIT.
+  // mutate gets a copy of the state and changes it. Version + state in the same
+  // transaction; the patch (final values) is computed here and published after COMMIT.
   update(key, mutate) {
     this.#check(key);
     this.db.exec('BEGIN IMMEDIATE');
@@ -47,7 +47,7 @@ export class Store {
       const next = structuredClone(current.state);
       mutate(next);
       const patch = diff(current.state, next);
-      if (!patch.length) { this.db.exec('COMMIT'); return null; } // nada mudou: sem nova versão
+      if (!patch.length) { this.db.exec('COMMIT'); return null; } // nothing changed: no new version
       const version = current.version + 1;
       this.q.put.run(key, version, JSON.stringify(next));
       this.db.exec('COMMIT');
@@ -60,8 +60,8 @@ export class Store {
   close() { this.db.close(); }
 }
 
-// Cache interno do subgraph. Serve qualquer snapshot com versão >= minVersion e
-// só lê o banco quando o que tem é antigo demais. Nunca devolve versão < minVersion.
+// The subgraph's internal cache. Serves any snapshot with version >= minVersion and
+// only reads the database when what it has is too old. Never returns version < minVersion.
 export class SnapshotCache {
   constructor(store, ttlMs = 1000, clock = Date.now) {
     this.store = store; this.ttlMs = ttlMs; this.clock = clock; this.entries = new Map(); this.reads = 0;
@@ -71,7 +71,8 @@ export class SnapshotCache {
     if (entry && entry.expires > this.clock() && entry.value.version >= minVersion) return structuredClone(entry.value);
     this.reads++;
     const value = this.store.read(key);
-    if (value.version < minVersion) throw new SyncError(`Versão ${minVersion} ainda não disponível (atual ${value.version})`, 'NOT_YET');
+    if (value.version < minVersion) throw new SyncError(`Version ${minVersion} not available yet (current ${value.version})`
+, 'NOT_YET');
     this.entries.set(key, { value, expires: this.clock() + this.ttlMs });
     return structuredClone(value);
   }

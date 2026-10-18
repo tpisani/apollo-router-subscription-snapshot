@@ -2,8 +2,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { graphql } from '../client/transport.mjs';
 import { playGenerator } from '../subgraphs/sports.mjs';
 
-// Simula o provedor de dados pela API (mutations): lances a EVENTS_PER_SECOND e um
-// gol a cada GOAL_EVERY_S segundos. Rode `npm run client` em outro terminal.
+// Simulates the data provider through the API (mutations): plays at EVENTS_PER_SECOND and a
+// goal every GOAL_EVERY_S seconds. Run `npm run client` in another terminal.
 const url = process.env.GRAPHQL_URL ?? 'http://localhost:4010/graphql';
 const matchId = process.env.MATCH_ID ?? 'm1';
 const seconds = Number(process.env.SECONDS ?? 60);
@@ -19,7 +19,8 @@ for (let tick = 0; Date.now() - t0 < seconds * 1000; tick++) {
   if (tick > 0 && tick % (goalEvery * 4) === 0) {
     const side = Math.random() < 0.5 ? 'HOME' : 'AWAY';
     const goal = (await graphql(url, 'mutation($m: ID!, $s: Side!) { scoreGoal(matchId: $m, side: $s) { version state { home away } } }', { m: matchId, s: side })).scoreGoal;
-    console.log(`GOL ${side}: ${goal.state.home} x ${goal.state.away} (placar v${goal.version})`);
-  } else if (tick % 4 === 0) console.log(`estatísticas v${version}`);
+    console.log(`GOAL ${side}: ${goal.state.home} x ${goal.state.away} (scoreboard v${goal.version})`);
+  } else if (tick % 4 === 0) console.log(`stats v${version}`
+);
   await delay(250);
 }

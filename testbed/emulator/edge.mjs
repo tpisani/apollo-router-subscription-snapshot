@@ -3,32 +3,33 @@ import { parse, getOperationAST } from 'graphql';
 import { createClient } from 'graphql-ws';
 import WebSocket from 'ws';
 
-// Borda que reproduz, de propósito no pior caso, os dois comportamentos do Apollo
-// Router que este protocolo precisa tolerar. NÃO é o Router; serve para testar
-// o protocolo sem licença GraphOS.
+// Edge that reproduces, deliberately in the worst case, the two Apollo Router
+// behaviors this protocol has to tolerate. It is NOT the Router; it exists to test
+// the protocol without a GraphOS license.
 //
-// 1. Deduplicação de subscriptions: assinaturas com a mesma operação e as mesmas
-//    variáveis compartilham um único upstream. Quem entra depois recebe só os
-//    frames seguintes; nada é reenviado na entrada.
-// 2. Cache de queries: TODA query bem-sucedida é cacheada para sempre, pela
-//    operação + variáveis, ignorando Cache-Control. Mais agressivo que o Router
-//    (que respeita o max-age do subgraph); se o protocolo funciona aqui, funciona lá.
+// 1. Subscription deduplication: subscriptions with the same operation and the same
+//    variables share a single upstream. A late joiner only gets the following
+//    frames; nothing is resent on join.
+// 2. Query cache: EVERY successful query is cached forever, by
+//    operation + variables, ignoring Cache-Control. More aggressive than the Router
+//    (which honors the subgraph's max-age); if the protocol works here, it works there.
 //
-// Respostas com erro não são cacheadas, como no Router.
-// Subscriptions saem no protocolo multipart do Router (subscriptionSpec 1.0).
+// Error responses are not cached, as in the Router.
+// Subscriptions go out in the Router's multipart protocol (subscriptionSpec 1.0).
 //
-// Protótipo do que um plugin nativo do Router faria (não existe por configuração):
-// 3. Retenção (retain): guarda o último frame de cada upstream deduplicado e o
-//    entrega na hora a quem entra nele. Só é correto porque todo frame traz o estado
-//    inteiro e uma versão: um frame retido mais velho que um em trânsito é ignorado
-//    pelo cliente. Some junto com o upstream quando o último assinante sai.
-// 4. Identidade na chave (identityHeaders): os headers listados entram na chave de
-//    deduplicação e de retenção, como o Router faz com headers na deduplicação.
-//    Clientes com identidades diferentes não compartilham upstream nem frame retido.
+// Prototype of what a native Router plugin would do (not available through config):
+// 3. Retention (retain): keeps the last frame of each deduplicated upstream and
+//    delivers it right away to whoever joins it. It is only correct because every
+//    frame carries the full state and a version: a retained frame older than one in
+//    flight is ignored by the client. It goes away with the upstream when the last
+//    subscriber leaves.
+// 4. Identity in the key (identityHeaders): the listed headers become part of the
+//    deduplication and retention key, as the Router does with headers in deduplication.
+//    Clients with different identities share neither the upstream nor the retained frame.
 //
-// Várias instâncias: cada edge deduplica e retém só os seus upstreams (como cada
-// instância do Router). `cache` pode ser compartilhado entre instâncias, como o Redis
-// do response cache.
+// Several instances: each edge deduplicates and retains only its own upstreams (like
+// each Router instance). `cache` can be shared across instances, like the response
+// cache's Redis.
 export async function startEdge({
   upstream, port = 0, host = '127.0.0.1', heartbeatMs = 5000, cacheQueries = true,
   retain = true, identityHeaders = [], cache = new Map(), name = 'edge'
@@ -37,7 +38,7 @@ export async function startEdge({
   const metrics = { cacheHits: 0, cacheMisses: 0, upstreamSubscriptions: 0, subscribers: 0, deduplicatedJoins: 0, retainedReplays: 0 };
   const ws = createClient({ url: upstream.replace(/^http/, 'ws'), webSocketImpl: WebSocket, lazy: true, retryAttempts: 5 });
 
-  // Upstreams abertos por operação: com deduplicação, um por (operação, variáveis).
+  // Open upstreams per operation: with deduplication, one per (operation, variables).
   const currentMetrics = () => {
     const upstreamByOperation = {};
     for (const stream of streams.values()) upstreamByOperation[stream.operation] = (upstreamByOperation[stream.operation] ?? 0) + 1;
@@ -50,7 +51,7 @@ export async function startEdge({
     let stream = streams.get(key);
     if (stream) metrics.deduplicatedJoins++;
     else {
-      stream = { subscribers: new Set(), operation: body.operationName ?? 'anônima' };
+      stream = { subscribers: new Set(), operation: body.operationName ?? 'anonymous' };
       streams.set(key, stream); metrics.upstreamSubscriptions++;
       const close = (last) => {
         if (streams.get(key) !== stream) return;
@@ -62,16 +63,16 @@ export async function startEdge({
           if (retain && !result.errors?.length) stream.last = result;
           for (const subscriber of stream.subscribers) subscriber.write(part({ payload: result }));
         },
-        error: error => close({ payload: null, errors: [{ message: error?.message ?? 'Upstream encerrado' }] }),
-        // Fim normal (ex.: placar no FULL_TIME): fecha o multipart sem erro, como o Router.
+        error: error => close({ payload: null, errors: [{ message: error?.message ?? 'Upstream ended' }] }),
+        // Normal end (e.g. scoreboard at FULL_TIME): closes the multipart without error, like the Router.
         complete: () => close(null)
       });
     }
     res.writeHead(200, { 'content-type': 'multipart/mixed;boundary="graphql";subscriptionSpec="1.0"', 'cache-control': 'no-store' });
     res.write('\r\n--graphql');
-    // Quem entra num upstream já aberto recebe o último estado na hora, em vez de
-    // esperar o próximo frame (commit ou periódico).
-    // Marcado como o plugin do Router marca: extensions.snapshot.
+    // A client joining an already open upstream gets the last state right away,
+    // instead of waiting for the next frame (commit or periodic).
+    // Marked the way the Router plugin marks it: extensions.snapshot.
     if (stream.last) { res.write(part({ payload: { ...stream.last, extensions: { ...stream.last.extensions, snapshot: true } } })); metrics.retainedReplays++; }
     stream.subscribers.add(res); metrics.subscribers++;
     const heartbeat = setInterval(() => res.write(part({})), heartbeatMs);
@@ -136,6 +137,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     port: Number(process.env.EDGE_PORT ?? 4010), host: process.env.EDGE_HOST ?? '0.0.0.0',
     retain: process.env.RETAIN !== '0', identityHeaders: (process.env.IDENTITY_HEADERS ?? '').split(',').filter(Boolean)
   });
-  console.log(`edge (dedup + retenção + cache de queries) ${edge.url.replace('0.0.0.0', 'localhost')} -> ${process.env.UPSTREAM_URL ?? 'http://localhost:4000/graphql'}`);
+  console.log(`edge (dedup + retention + query cache)
+ ${edge.url.replace('0.0.0.0', 'localhost')} -> ${process.env.UPSTREAM_URL ?? 'http://localhost:4000/graphql'}`);
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => edge.close().then(() => process.exit(0)));
 }

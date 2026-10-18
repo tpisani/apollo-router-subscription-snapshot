@@ -1,29 +1,29 @@
 const link = 'extend schema @link(url: "https://specs.apollo.dev/federation/v2.4", import: ["@key"])';
 
-// Placar: subgraph próprio, estado pequeno, frames com o estado inteiro.
+// Scoreboard: its own subgraph, small state, frames with the full state.
 export const scoresSDL = `
   ${link}
   enum Side { HOME AWAY }
   enum MatchStatus { SCHEDULED LIVE HALF_TIME FULL_TIME }
   enum ScoreboardFrameKind { STATE }
 
-  "seconds vale no instante updatedAt (epoch ms); com running, o cliente avança sozinho."
+  "seconds is the value at the instant updatedAt (epoch ms); while running, the client advances it on its own."
   type Clock { running: Boolean!, seconds: Int!, updatedAt: Float! }
   type ScoreEvent { type: String!, side: Side, minute: Int! }
-  "kickoff: início previsto (epoch ms). O cliente assina a partir de kickoff − 15 min e para no FULL_TIME."
+  "kickoff: scheduled start (epoch ms). The client subscribes from kickoff − 15 min and stops at FULL_TIME."
   type Scoreboard { status: MatchStatus!, kickoff: Float, period: Int!, home: Int!, away: Int!, clock: Clock!, lastEvent: ScoreEvent }
   type ScoreboardSnapshot { matchId: ID!, version: Int!, state: Scoreboard! }
   type ScoreboardFrame {
     matchId: ID!
     kind: ScoreboardFrameKind!
     version: Int!
-    "Epoch ms do commit; nulo nos frames periódicos."
+    "Epoch ms of the commit; null on periodic frames."
     committedAt: Float
     state: Scoreboard!
   }
 
   type Query {
-    "Um placar consistente em alguma versão >= minVersion. Cacheável."
+    "A consistent scoreboard at some version >= minVersion. Cacheable."
     scoreboard(matchId: ID!, minVersion: Int! = 0): ScoreboardSnapshot!
   }
   type Mutation {
@@ -33,12 +33,12 @@ export const scoresSDL = `
     scheduleMatch(matchId: ID!, kickoff: Float!): ScoreboardSnapshot!
   }
   type Subscription {
-    "Estado inteiro a cada mudança e a cada segundo. Mesmas variáveis para todos: deduplicável. Termina depois do frame FULL_TIME."
+    "Full state on every change and every second. Same variables for everyone: deduplicable. Ends after the FULL_TIME frame."
     scoreboardUpdates(matchId: ID!): ScoreboardFrame!
   }
 `;
 
-// Estatísticas: subgraph próprio, estado maior, frames de estado inteiro limitados a 2/s.
+// Stats: its own subgraph, larger state, full-state frames limited to 2/s.
 export const statsSDL = `
   ${link}
   enum Side { HOME AWAY }
@@ -53,28 +53,29 @@ export const statsSDL = `
     matchId: ID!
     kind: StatsFrameKind!
     version: Int!
-    "Epoch ms do commit mais antigo incluído no frame; nulo nos frames periódicos."
+    "Epoch ms of the oldest commit included in the frame; null on periodic frames."
     committedAt: Float
-    "O estado inteiro. O frame de maior versão substitui os anteriores."
+    "The full state. The frame with the highest version replaces the previous ones."
     state: MatchStats!
   }
   input StatEventInput { side: Side!, playerId: ID!, type: StatType! }
 
   type Query {
-    "Estatísticas consistentes em alguma versão >= minVersion. Cacheável."
+    "Consistent stats at some version >= minVersion. Cacheable."
     matchStats(matchId: ID!, minVersion: Int! = 0): StatsSnapshot!
   }
   type Mutation {
-    "Ingestão do provedor (incrementos). Devolve a nova versão."
+    "Ingestion from the data provider (increments). Returns the new version."
     recordStats(matchId: ID!, events: [StatEventInput!]!): Int!
   }
   type Subscription {
-    "Estado inteiro: na hora quando calmo, no máximo 1 a cada 500 ms numa rajada, e a cada segundo. Deduplicável."
+    "Full state: right away when quiet, at most 1 every 500 ms in a burst, and every second. Deduplicable."
     statsUpdates(matchId: ID!): StatsFrame!
   }
 `;
 
-// Dados estáticos: cache longo, fora dos canais ao vivo.
+// Static data: long cache, outside the live channels.
+
 export const catalogSDL = `
   ${link}
   enum Side { HOME AWAY }

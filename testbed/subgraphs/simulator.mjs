@@ -1,7 +1,8 @@
 import { scoreboardOps, applyStatEvents, playGenerator } from './sports.mjs';
 
-// Simula o provedor de dados de uma partida, escrevendo direto nos stores (como
-// faria um ingestor). Estatísticas: eventsPerSecond lances; placar: gol ocasional.
+// Simulates a match's data provider, writing straight into the stores (as an
+// ingestor would). Stats: eventsPerSecond plays; scoreboard: an occasional goal.
+
 export function simulateMatch({ stores, matchId = 'm1', eventsPerSecond = 20, goalChancePerSecond = 0.03, seed = 7 }) {
   const next = playGenerator(matchId, seed);
   let x = seed * 31;

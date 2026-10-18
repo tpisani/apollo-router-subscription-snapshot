@@ -71,8 +71,8 @@ export async function startEdge({
     res.write('\r\n--graphql');
     // Quem entra num upstream já aberto recebe o último estado na hora, em vez de
     // esperar o próximo frame (commit ou periódico).
-    // Marcado como o plugin do Router marca: extensions.retainedFrame.
-    if (stream.last) { res.write(part({ payload: { ...stream.last, extensions: { ...stream.last.extensions, retainedFrame: true } } })); metrics.retainedReplays++; }
+    // Marcado como o plugin do Router marca: extensions.snapshot.
+    if (stream.last) { res.write(part({ payload: { ...stream.last, extensions: { ...stream.last.extensions, snapshot: true } } })); metrics.retainedReplays++; }
     stream.subscribers.add(res); metrics.subscribers++;
     const heartbeat = setInterval(() => res.write(part({})), heartbeatMs);
     res.on('close', () => {

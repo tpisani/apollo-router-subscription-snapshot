@@ -1,4 +1,4 @@
-# Router customizado (router-plugin/) com o plugin poc.retain_last_frame.
+# Router customizado (router-subscription-snapshot/) com o plugin subscription_snapshot.
 # Exige APOLLO_KEY/APOLLO_GRAPH_REF com subscriptions federadas (inclusas no plano
 # gratuito do GraphOS). Sem response cache, para depender só de subscriptions.
 #   RETAIN_ENABLED=false desliga a retenção (instância de comparação).
@@ -33,7 +33,7 @@ headers:
         - propagate:
             named: authorization
 plugins:
-  poc.retain_last_frame:
+  subscription_snapshot:
     enabled: ${env.RETAIN_ENABLED:-true}
     # A mesma identidade que a deduplicação usa: tokens diferentes nunca
     # compartilham frame retido.

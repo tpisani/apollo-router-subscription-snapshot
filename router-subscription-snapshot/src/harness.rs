@@ -40,7 +40,7 @@ async fn harness(retain: bool) -> router::BoxCloneService {
             "subscription": { "enabled": true, "deduplication": { "enabled": true }, "mode": { "passthrough": { "subgraphs": passthrough } } },
             "headers": { "all": { "request": [{ "propagate": { "named": "authorization" } }] } },
             "include_subgraph_errors": { "all": true },
-            "plugins": { "poc.retain_last_frame": { "enabled": retain, "identity_headers": ["authorization"] } }
+            "plugins": { "subscription_snapshot": { "enabled": retain, "identity_headers": ["authorization"] } }
         }))
         .unwrap()
         .build_router()
@@ -108,8 +108,8 @@ async fn next_frame(stream: &mut (impl Stream<Item = Value> + Unpin)) -> Value {
 fn version(payload: &Value) -> i64 {
     payload["data"]["scoreboardUpdates"]["version"].as_i64().unwrap_or_else(|| panic!("frame sem versão: {payload}"))
 }
-fn retained(payload: &Value) -> bool {
-    payload["extensions"]["retainedFrame"] == json!(true)
+fn is_snapshot(payload: &Value) -> bool {
+    payload["extensions"]["snapshot"] == json!(true)
 }
 
 /// Streams abertos no subgraph de placar para a partida (GET /metrics).
@@ -163,7 +163,7 @@ async fn deduplicacao_e_retencao_no_pipeline_do_router() {
 
     let mut a = subscribe(&router, &match_id, None).await;
     let first = next_frame(&mut a).await;
-    assert!(!retained(&first), "o primeiro assinante recebe o frame inicial do subgraph");
+    assert!(!is_snapshot(&first), "o primeiro assinante recebe o frame inicial do subgraph");
     until_upstreams(&match_id, 1).await;
     tokio::time::sleep(Duration::from_millis(200)).await; // upstream aberto e parado
 
@@ -172,7 +172,7 @@ async fn deduplicacao_e_retencao_no_pipeline_do_router() {
     let late = next_frame(&mut b).await;
     let late_ms = t0.elapsed().as_millis();
     println!("late joiner com retenção: {late_ms} ms, frame {late}");
-    assert!(retained(&late), "o late joiner recebe o frame retido: {late}");
+    assert!(is_snapshot(&late), "o late joiner recebe o frame retido: {late}");
     assert_eq!(version(&late), version(&first));
     assert!(late_ms < 300, "com retenção: {late_ms} ms");
     assert_eq!(upstreams(&match_id).await, 1, "a deduplicação do Router manteve um upstream para os dois");
@@ -183,7 +183,7 @@ async fn deduplicacao_e_retencao_no_pipeline_do_router() {
         loop {
             let frame = next_frame(stream).await;
             if version(&frame) >= goal {
-                assert!(!retained(&frame));
+                assert!(!is_snapshot(&frame));
                 assert_eq!(frame["data"]["scoreboardUpdates"]["state"]["home"], json!(1));
                 break;
             }
@@ -210,7 +210,7 @@ async fn sem_retencao_o_late_joiner_espera_o_periodico() {
     let late = next_frame(&mut b).await;
     let late_ms = t0.elapsed().as_millis();
     println!("late joiner sem retenção: {late_ms} ms");
-    assert!(!retained(&late));
+    assert!(!is_snapshot(&late));
     assert!(late_ms > 500, "sem retenção, espera o frame periódico ({late_ms} ms)");
     assert_eq!(upstreams(&match_id).await, 1);
 }
@@ -227,8 +227,8 @@ async fn identidades_diferentes_nao_compartilham_upstream_nem_frame() {
     let mut b = subscribe(&router, &match_id, Some("Bearer b")).await;
     let mut a2 = subscribe(&router, &match_id, Some("Bearer a")).await;
     let (fb, fa2) = (next_frame(&mut b).await, next_frame(&mut a2).await);
-    assert!(!retained(&fb), "b (outro token) não recebe o frame de a");
-    assert!(retained(&fa2), "a2 (mesmo token de a1) recebe o frame retido");
+    assert!(!is_snapshot(&fb), "b (outro token) não recebe o frame de a");
+    assert!(is_snapshot(&fa2), "a2 (mesmo token de a1) recebe o frame retido");
     until_upstreams(&match_id, 2).await;
 }
 
@@ -242,7 +242,7 @@ async fn full_time_encerra_os_clientes_deduplicados_e_limpa_a_retencao() {
     next_frame(&mut a).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     let mut b = subscribe(&router, &match_id, None).await;
-    assert!(retained(&next_frame(&mut b).await));
+    assert!(is_snapshot(&next_frame(&mut b).await));
     assert_eq!(upstreams(&match_id).await, 1);
 
     // O subgraph manda o frame FULL_TIME e encerra; o Router fecha os dois clientes.
@@ -258,7 +258,7 @@ async fn full_time_encerra_os_clientes_deduplicados_e_limpa_a_retencao() {
     // de um upstream que já fechou) e o stream termina em seguida.
     let mut c = subscribe(&router, &match_id, None).await;
     let first = next_frame(&mut c).await;
-    assert!(!retained(&first), "a retenção foi limpa com o upstream");
+    assert!(!is_snapshot(&first), "a retenção foi limpa com o upstream");
     assert_eq!(status(&first), "FULL_TIME");
     ends(&mut c).await;
     until_upstreams(&match_id, 0).await;

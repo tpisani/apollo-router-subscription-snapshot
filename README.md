@@ -13,7 +13,7 @@ deduplicação e o cache do Router.
 - **Uma regra só no cliente:** fica com o frame de maior versão. Não há lacuna,
   histórico nem query de recuperação.
 - **Retenção do último frame**, num plugin nativo do Apollo Router
-  ([`router-plugin/`](router-plugin/)) e no emulador: quem entra num upstream já
+  ([`router-subscription-snapshot/`](router-subscription-snapshot/)) e no emulador: quem entra num upstream já
   aberto recebe o estado na hora (1 ms no pipeline do Router, contra ~2,8 s
   esperando o frame periódico).
 - **Várias instâncias:** cada uma deduplica e retém os seus upstreams; uma
@@ -34,7 +34,7 @@ Por que dois canais, estado inteiro, retenção e várias instâncias, com os ex
 
 - **Políticas de envio por canal (hub, limitador, frame periódico, fila):** [`src/channels.mjs`](src/channels.mjs)
 - **Cliente (`StateSync`, igual nos dois canais):** [`client/sync.mjs`](client/sync.mjs)
-- **Plugin do Router `poc.retain_last_frame` (Rust):** [`router-plugin/src/retain.rs`](router-plugin/src/retain.rs)
+- **Plugin do Router `subscription_snapshot` (Rust):** [`router-subscription-snapshot/src/snapshot.rs`](router-subscription-snapshot/src/snapshot.rs)
 - **Retenção, chave com identidade e cache no emulador:** [`scripts/edge.mjs`](scripts/edge.mjs)
 - **Várias instâncias atrás de um balanceador:** [`scripts/balancer.mjs`](scripts/balancer.mjs), [`tests/scale.test.mjs`](tests/scale.test.mjs)
 - **Domínio (placar, relógio, estatísticas):** [`src/sports.mjs`](src/sports.mjs)
@@ -107,7 +107,7 @@ MODE=callback npm run test:router-real   # o mesmo com os subgraphs no modo call
 docker compose --profile apollo-plugin up --build -d && npm run test:router-scale
 ```
 
-Detalhes em [`router-plugin/README.md`](router-plugin/README.md). O que costuma
+Detalhes em [`router-subscription-snapshot/README.md`](router-subscription-snapshot/README.md). O que costuma
 quebrar ao atualizar o Router (20 versões comparadas, plugin testado na 2.18):
 [`docs/router-upgrades.md`](docs/router-upgrades.md).
 
@@ -115,7 +115,7 @@ quebrar ao atualizar o Router (20 versões comparadas, plugin testado na 2.18):
 
 ```bash
 npm test                 # 44 testes: domínio, canais, cliente, experimentos, ponta a ponta e várias instâncias
-(cd router-plugin && cargo test --release)   # 8 testes de unidade do plugin
+(cd router-subscription-snapshot && cargo test --release)   # 8 testes de unidade do plugin
 npm run bench            # partida simulada pelo edge: 100 clientes só de placar + 50 completos
 EDGES=3 npm run bench    # o mesmo com 3 instâncias atrás de um balanceador
 SCORE_ONLY=0 FULL=200 STORM_RATE=400 npm run bench

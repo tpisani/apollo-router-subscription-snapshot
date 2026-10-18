@@ -20,7 +20,7 @@ async function until(predicate, message, ms = 10_000) {
 const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
 const monotonic = list => list.every((v, i) => i === 0 || v >= list[i - 1]);
 
-// Várias instâncias do Router com o plugin poc.retain_last_frame, medidas pelo
+// Várias instâncias do Router com o plugin subscription_snapshot, medidas pelo
 // cliente e pelos subgraphs (/metrics, streams abertos por partida):
 //   routerUrls: cada instância com retenção, acessada direto
 //   lbUrl:      um balanceador na frente delas (sem afinidade)
@@ -62,7 +62,7 @@ export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, 
       c.syncs[channel] = sync; c.seen[channel] = []; c.retained[channel] = 0;
       c.runs.push(runSync({ sync, signal: controller.signal, wait: () => 100, stallMs: 5000,
         connect: signal => transports.multipart(url, channel, matchId, { signal, headers: clientHeaders,
-          onPayload: payload => { if (payload.extensions?.retainedFrame) c.retained[channel]++; } }),
+          onPayload: payload => { if (payload.extensions?.snapshot) c.retained[channel]++; } }),
         onUpdate: view => {
           if (view.version !== null) c.seen[channel].push(view.version);
           if (view.synced) c.syncedAt[channel] ??= Date.now();
@@ -207,7 +207,7 @@ export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, 
         const phases = []; const errors = []; const retainedSeen = { n: 0 };
         const w = watchMatch({ matchId, lead, api,
           connect: (channel, signal) => transports.multipart(url, channel, matchId, { signal, headers,
-            onPayload: payload => { if (payload.extensions?.retainedFrame) retainedSeen.n++; } }),
+            onPayload: payload => { if (payload.extensions?.snapshot) retainedSeen.n++; } }),
           onPhase: p => phases.push(p),
           onError: e => { errors.push(e); if (e.message.includes(RATE_LIMIT)) rateLimited ??= e.message.slice(0, 200); },
           runOptions: { wait: () => 100 } });
@@ -255,7 +255,7 @@ export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, 
       //    retido do upstream que fechou) e o stream termina.
       const late = { frames: [], retained: 0 };
       for await (const frame of transports.multipart(routerUrls[0], 'scoreboard', scheduled, { headers,
-        onPayload: payload => { if (payload.extensions?.retainedFrame) late.retained++; } })) late.frames.push(frame.state.status);
+        onPayload: payload => { if (payload.extensions?.snapshot) late.retained++; } })) late.frames.push(frame.state.status);
       r.depoisDoFim = { frames: late.frames, framesRetidos: late.retained };
       assert.deepEqual(late.frames, ['FULL_TIME']); assert.equal(late.retained, 0);
 

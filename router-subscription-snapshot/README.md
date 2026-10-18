@@ -1,4 +1,4 @@
-# Router customizado com `poc.retain_last_frame`
+# `subscription_snapshot`: plugin do Apollo Router
 
 Apollo Router 2.18.0 com um plugin nativo que guarda o último evento de cada
 subscription deduplicada. Quem entra num upstream já aberto recebe esse estado na
@@ -14,18 +14,23 @@ O comportamento é o mesmo do emulador (`scripts/edge.mjs`), agora dentro do Rou
   `identity_headers`. Tokens diferentes nunca compartilham frame retido.
 - **O que guarda:** só eventos com dados e sem erros.
 - **Ciclo de vida:** a entrada existe enquanto houver assinante com a chave. Quando
-  o último stream é descartado, o frame retido some junto com o upstream.
-- **Marcação:** o frame retido sai com `extensions.retainedFrame: true`. O cliente
+  o último stream termina ou é descartado, o snapshot some junto com o upstream.
+- **Marcação:** o snapshot sai com `extensions.snapshot: true`. O cliente
   não precisa dela (ele fica com a maior versão); os testes a usam para medir.
 - **Correção:** depende de todo frame trazer o estado inteiro e uma versão. Um frame
   retido mais velho que um em trânsito é ignorado pelo cliente.
 
 ```yaml
 plugins:
-  poc.retain_last_frame:
+  subscription_snapshot:
     enabled: true
     identity_headers: [authorization]
 ```
+
+O plugin é registrado sem namespace (`register_plugin!("", "subscription_snapshot", …)`),
+então a chave em `plugins:` é só `subscription_snapshot`. Para evitar colisão com
+outro plugin customizado no mesmo binário, dá para trocar por `"<namespace>"` e usar
+`<namespace>.subscription_snapshot` na config.
 
 ## Compilar e testar (sem licença)
 
@@ -33,7 +38,7 @@ Precisa de Rust 1.97.1 (o mínimo do apollo-router 2.18.0, fixado em `rust-toolc
 compilação do Router leva ~20 min.
 
 ```bash
-cd router-plugin
+cd router-subscription-snapshot
 cargo test --release          # testes de unidade do plugin
 cargo build --release         # target/release/router
 ./target/release/router config validate ../router/router-plugin.yaml

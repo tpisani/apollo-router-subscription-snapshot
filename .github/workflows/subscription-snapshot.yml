@@ -1,15 +1,15 @@
-name: Router plugin
+name: subscription_snapshot
 on:
   push:
-    paths: ['router-plugin/**', 'router/**', 'scripts/router-harness.mjs', '.github/workflows/router-plugin.yml']
+    paths: ['router-subscription-snapshot/**', 'router/**', 'scripts/router-harness.mjs', '.github/workflows/subscription-snapshot.yml']
   pull_request:
-    paths: ['router-plugin/**', 'router/**', 'scripts/router-harness.mjs', '.github/workflows/router-plugin.yml']
+    paths: ['router-subscription-snapshot/**', 'router/**', 'scripts/router-harness.mjs', '.github/workflows/subscription-snapshot.yml']
 jobs:
   test:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: router-plugin
+        working-directory: router-subscription-snapshot
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,7 +22,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: router-plugin
+          workspaces: router-subscription-snapshot
       # Testes de unidade do plugin (não precisam de licença).
       - run: cargo test --release --locked
       - run: cargo build --release --locked

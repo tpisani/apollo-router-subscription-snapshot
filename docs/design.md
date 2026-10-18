@@ -13,7 +13,7 @@
   frame periódico.
 - **As subscriptions só têm `matchId`:** o Router deduplica, com um upstream por
   canal e partida em cada instância.
-- **Retenção do último frame** (plugin nativo do Router em `router-plugin/`, e o
+- **Retenção do último frame** (plugin nativo do Router em `router-subscription-snapshot/`, e o
   mesmo comportamento no emulador `scripts/edge.mjs`): quem entra num upstream já
   aberto recebe o estado na hora, em vez de esperar o frame periódico.
 - **Várias instâncias:** cada uma deduplica e retém só os seus upstreams, e isso
@@ -106,7 +106,7 @@ upstream deduplicado:
 - **Coprocessor:** não cria um frame quando o cliente se conecta.
 
 Por isso é um **plugin nativo em Rust** num build customizado
-(`router-plugin/`, `poc.retain_last_frame`, apollo-router 2.18.0).
+(`router-subscription-snapshot/`, `subscription_snapshot`, apollo-router 2.18.0).
 `scripts/edge.mjs` faz o mesmo no emulador.
 
 - **Retenção:** guarda o último evento (com dados e sem erros) de cada chave e o
@@ -121,7 +121,7 @@ Por isso é um **plugin nativo em Rust** num build customizado
   na chave de retenção. No Router, o mesmo header é propagado ao subgraph, então a
   deduplicação também separa por identidade. Clientes com identidades diferentes
   não compartilham upstream nem frame retido.
-- **Marcação:** o frame retido sai com `extensions.retainedFrame: true`, usado só
+- **Marcação:** o frame retido sai com `extensions.snapshot: true`, usado só
   pelos testes.
 - **Correção:** só funciona porque todo frame traz o estado inteiro e uma versão.
   Um frame retido mais velho que um em trânsito é ignorado pelo cliente.

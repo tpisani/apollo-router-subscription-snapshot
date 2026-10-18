@@ -22,15 +22,31 @@ O comportamento é o mesmo do emulador (`scripts/edge.mjs`), agora dentro do Rou
 
 ```yaml
 plugins:
-  subscription_snapshot:
+  globo.subscription_snapshot:
     enabled: true
     identity_headers: [authorization]
 ```
 
-O plugin é registrado sem namespace (`register_plugin!("", "subscription_snapshot", …)`),
-então a chave em `plugins:` é só `subscription_snapshot`. Para evitar colisão com
-outro plugin customizado no mesmo binário, dá para trocar por `"<namespace>"` e usar
-`<namespace>.subscription_snapshot` na config.
+Como recomenda a Apollo, o plugin é registrado com um nome de grupo
+(`register_plugin!("globo", "subscription_snapshot", …)`), então a chave
+em `plugins:` é `globo.subscription_snapshot`. O grupo evita colisão com
+plugins da Apollo e com outros plugins customizados no mesmo binário.
+
+## Convenções
+
+O crate segue os [exemplos de plugins nativos](https://github.com/apollographql/router/tree/dev/examples)
+e as regras de lint do repositório do Apollo Router:
+
+- `Plugin` com `type Config` (`Deserialize` + `JsonSchema`, `deny_unknown_fields`;
+  os doc comments viram a descrição no JSON schema da config) e hook montado com
+  `ServiceBuilder` e as layers do `apollo_router::layers`.
+- Edition 2024 e o mesmo `rustfmt.toml` (`style_edition = "2024"`), com um import
+  por linha, agrupados em std, crates externos e o próprio crate.
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` e `cargo doc`
+  com `RUSTDOCFLAGS=-D warnings`, como o `xtask lint` da Apollo; o CI roda os três.
+- Testes do hook com `tower_test::mock::pair` (o substituto que a Apollo indica para
+  os `Mock*Service`, obsoletos) e do registro com o `TestHarness`.
+- Código, comentários e mensagens em inglês.
 
 ## Compilar e testar (sem licença)
 
@@ -39,6 +55,8 @@ compilação do Router leva ~20 min.
 
 ```bash
 cd router-subscription-snapshot
+cargo fmt --all --check
+cargo clippy --release --all-targets --no-deps -- -D warnings
 cargo test --release          # testes de unidade do plugin
 cargo build --release         # target/release/router
 ./target/release/router config validate ../router/router-plugin.yaml

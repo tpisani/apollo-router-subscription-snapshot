@@ -1,0 +1,5 @@
+# Same as the Apollo Router repository. Apollo also formats imports one per line
+# and grouped as std, external crates and the crate itself (`imports_granularity =
+# "Item"`, `group_imports = "StdExternalCrate"`), which needs nightly rustfmt; the
+# code keeps that layout by hand.
+style_edition = "2024"

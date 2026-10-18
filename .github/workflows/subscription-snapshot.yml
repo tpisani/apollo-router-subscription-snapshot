@@ -23,11 +23,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: router-subscription-snapshot
-      # Testes de unidade do plugin (não precisam de licença).
+      # Same lints as the Apollo Router repository (xtask lint).
+      - run: cargo fmt --all --check
+      - run: cargo clippy --release --locked --all-targets --no-deps -- -D warnings
+      - run: cargo doc --release --locked --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      # Plugin unit tests (no license needed).
       - run: cargo test --release --locked
       - run: cargo build --release --locked
-      # A config do perfil apollo-plugin, validada pelo próprio binário com o plugin.
+      # The apollo-plugin profile configuration, validated by the binary with the plugin.
       - run: ./target/release/router config validate ../router/router-plugin.yaml
-      # O plugin no pipeline do Router (TestHarness), contra os subgraphs Node.
+      - run: ./target/release/router config validate ../router/router-plugin-callback.yaml
+      # The plugin in the Router pipeline (TestHarness), against the Node subgraphs.
       - run: npm run test:router-harness
         working-directory: .

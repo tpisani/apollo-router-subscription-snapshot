@@ -28,16 +28,21 @@ test.after(async () => { await stack?.stop(); });
 // que nunca regridem, inclusive trocando de instância.
 function client(url, matchId, channels, { headers = {} } = {}) {
   const controller = new AbortController();
-  const c = { syncs: {}, seen: {}, errors: [], runs: [] };
+  const c = { syncs: {}, seen: {}, errors: [], runs: [], failedAt: {}, frameAt: {} };
   for (const channel of channels) {
     const sync = createSync(channel, { matchId, api: snapshotApi(url, channel, matchId, { headers }) });
     c.syncs[channel] = sync; c.seen[channel] = [];
     c.runs.push(runSync({ sync, signal: controller.signal, wait: () => 100, stallMs: 5000,
       connect: signal => transports.multipart(url, channel, matchId, { signal, headers }),
-      onUpdate: view => { if (view.version !== null) c.seen[channel].push(view.version); },
-      onError: error => c.errors.push(error) }));
+      onUpdate: view => {
+        if (view.version !== null) c.seen[channel].push(view.version);
+        if (view.synced) c.frameAt[channel] = Date.now();
+      },
+      onError: error => { c.errors.push(error); c.failedAt[channel] = Date.now(); } }));
   }
   c.synced = () => Object.values(c.syncs).every(s => s.synced);
+  // Every channel got a frame after its last error, i.e. it reconnected and resynced.
+  c.recovered = () => c.synced() && channels.every(channel => !(c.failedAt[channel] >= c.frameAt[channel]));
   c.close = async () => { controller.abort(); await Promise.all(c.runs); };
   return c;
 }
@@ -111,13 +116,19 @@ test('instância cai no meio do jogo: clientes migram pelo balanceador, sem regr
       stores.stats.update(matchId, s => applyStatEvents(s, [next(), next()], matchId));
       if (Math.floor((Date.now() - t0) / 1000) > goals) { stores.scoreboard.update(matchId, s => scoreboardOps.scoreGoal(s, { side: 'HOME' }, Date.now())); goals++; }
       if (!killedAt && Date.now() - t0 > 1500) {
-        killedAt = Date.now(); await stack.killEdge(1);
-        // Tempo até todos voltarem a estar sincronizados (reconexão + frame retido).
+        // Time until every client is back in sync (reconnection + snapshot). Watched
+        // from before the kill, since the clients can reconnect before killEdge returns;
+        // the drop shows up as a client error, because `synced` only resets on
+        // reconnection and the snapshot comes right after, so polling it can miss it.
+        const errorsBefore = clients.reduce((n, c) => n + c.errors.length, 0);
+        killedAt = Date.now();
         recovery = (async () => {
-          await until(() => clients.some(c => !c.synced()), 'queda percebida', 3000).catch(() => {});
-          await until(() => clients.every(c => c.synced()), 'recuperação', 10_000);
+          await until(() => clients.reduce((n, c) => n + c.errors.length, 0) > errorsBefore, 'queda percebida', 3000);
+          await until(() => clients.every(c => c.recovered()), 'recuperação', 10_000);
           return Date.now() - killedAt;
         })();
+        recovery.catch(() => {}); // awaited below; no unhandled rejection meanwhile
+        await stack.killEdge(1);
       }
       await delay(50);
     }

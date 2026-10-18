@@ -62,7 +62,7 @@ cargo clippy --release --all-targets --no-deps -- -D warnings
 cargo test --release          # testes de unidade (os de integração ficam ignorados)
 cargo build --release         # target/release/router
 ./target/release/router config validate examples/router/router-plugin.yaml
-docker build -t router-subscription-snapshot .
+docker build -t apollo-router-subscription-snapshot .
 ```
 
 Os testes de integração precisam dos subgraphs do testbed:
@@ -83,7 +83,7 @@ substitui rodar o binário com GraphOS
 O crate segue os [exemplos de plugins nativos](https://github.com/apollographql/router/tree/dev/examples)
 e as regras de lint do repositório do Apollo Router:
 
-- Uma lib com o plugin e um binário que só a linka (`use router_subscription_snapshot as _;`
+- Uma lib com o plugin e um binário que só a linka (`use subscription_snapshot as _;`
   basta para o `register_plugin!` valer), com os testes de integração em `tests/`.
 - `Plugin` com `type Config` (`Deserialize` + `JsonSchema`, `deny_unknown_fields`;
   os doc comments viram a descrição no JSON schema da config) e hook montado com

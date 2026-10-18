@@ -55,7 +55,7 @@ export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, 
   // tempo até o primeiro estado.
   const connect = (url, matchId, channels, { headers: clientHeaders = headers } = {}) => {
     const controller = new AbortController();
-    const c = { syncs: {}, seen: {}, retained: {}, errors: [], runs: [], t0: Date.now(), syncedAt: {} };
+    const c = { syncs: {}, seen: {}, retained: {}, errors: [], runs: [], t0: Date.now(), syncedAt: {}, failedAt: {}, frameAt: {} };
     for (const channel of channels) {
       const snapshotUrl = direct ? direct[channel === 'scoreboard' ? 'scores' : 'stats'] : url;
       const sync = createSync(channel, { matchId, api: snapshotApi(snapshotUrl, channel, matchId, { headers: clientHeaders }) });
@@ -65,11 +65,13 @@ export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, 
           onPayload: payload => { if (payload.extensions?.snapshot) c.retained[channel]++; } }),
         onUpdate: view => {
           if (view.version !== null) c.seen[channel].push(view.version);
-          if (view.synced) c.syncedAt[channel] ??= Date.now();
+          if (view.synced) { c.syncedAt[channel] ??= Date.now(); c.frameAt[channel] = Date.now(); }
         },
-        onError: error => { c.errors.push(error); if (error.message.includes(RATE_LIMIT)) rateLimited ??= error.message.slice(0, 200); } }));
+        onError: error => { c.errors.push(error); c.failedAt[channel] = Date.now(); if (error.message.includes(RATE_LIMIT)) rateLimited ??= error.message.slice(0, 200); } }));
     }
     c.synced = () => Object.values(c.syncs).every(s => s.synced);
+    // Every channel got a frame after its last error, i.e. it reconnected and resynced.
+    c.recovered = () => c.synced() && channels.every(channel => !(c.failedAt[channel] >= c.frameAt[channel]));
     c.close = async () => { controller.abort(); await Promise.all(c.runs); };
     clients.push(c);
     return c;
@@ -171,13 +173,18 @@ export async function verifyRouterScale({ lbUrl, routerUrls, plainUrl, metrics, 
         statsVersion = await api.plays(matchId, [next(), next()]);
         if (Math.floor((Date.now() - t0) / 1000) > goals) { scoreVersion = await api.goal(matchId); goals++; }
         if (kill && !killed && Date.now() - t0 > 2000) {
+          // Watched from before the kill, through the client errors: `synced` only
+          // resets on reconnection and the snapshot comes right after, so polling it
+          // can miss the drop (see tests/scale.test.mjs).
+          const errorsBefore = list.reduce((n, c) => n + c.errors.length, 0);
           killed = { at: Date.now() };
-          await kill();
           killed.recovery = (async () => {
-            await until(() => list.some(c => !c.synced()), 'queda percebida', 5000).catch(() => {});
-            await until(() => list.every(c => c.synced()), 'recuperação', 20_000);
+            await until(() => list.reduce((n, c) => n + c.errors.length, 0) > errorsBefore, 'queda percebida', 5000);
+            await until(() => list.every(c => c.recovered()), 'recuperação', 20_000);
             return Date.now() - killed.at;
           })();
+          killed.recovery.catch(() => {}); // awaited below; no unhandled rejection meanwhile
+          await kill();
         }
         await delay(50);
       }

@@ -98,7 +98,7 @@ services:
   router-a: &plugin-router
     profiles: [apollo-plugin]
     build: ..
-    image: router-subscription-snapshot:local
+    image: apollo-router-subscription-snapshot:local
     command: ["--config", "/dist/config/router-plugin.yaml", "--supergraph", "/supergraph/supergraph.graphql"]
     environment:
       APOLLO_KEY: ${APOLLO_KEY:-}

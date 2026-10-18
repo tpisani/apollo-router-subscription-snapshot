@@ -162,6 +162,27 @@ clientes ──LB──┬── instância A ─ 1 upstream por (canal, partida
   subgraphs tiverem réplicas, um bus que leve cada commit aos hubs de todas elas.
   O frame periódico lê o estado do banco e corrige perdas desse bus.
 
+## Ciclo de vida: query ou subscription
+
+Partida que não começou ou já terminou não precisa de subscription. O cliente
+(`client/lifecycle.mjs`) decide assim (regras em `src/sports.mjs`):
+
+- **O horário decide quando começar:** antes de `kickoff − 15 min`, só a query; a
+  partir daí, subscription, seja qual for o status que a query devolveu. Um jogo
+  atrasado fica coberto: o cliente já está assinando.
+- **O status decide quando parar:** depois do frame `FULL_TIME` o subgraph encerra
+  o stream do placar; o Router fecha todos os clientes deduplicados, o plugin solta
+  a retenção e o cliente fecha também as estatísticas. Não reconecta.
+- **Cache por status:** a query do placar manda `SCHEDULED` com `max-age` de até
+  5 min, nunca além de `kickoff − 15 min` (`no-store` a menos de 1 s); ao vivo, 2 s;
+  `FULL_TIME`, 1 h. Um `SCHEDULED` antigo não atrasa ninguém, porque quem decide é
+  o relógio; um `LIVE` antigo custa só uma subscription curta, que fecha no primeiro
+  frame `FULL_TIME`.
+- **Limite:** um jogo antecipado para antes da janela sem `scheduleMatch` só é
+  percebido na hora da janela.
+
+Página explicando com simulador: [`cenarios/status-e-kickoff.html`](cenarios/status-e-kickoff.html).
+
 ## Consistência entre canais
 
 Cada canal é exato numa versão; entre canais não há transação. As estatísticas

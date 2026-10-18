@@ -1,7 +1,7 @@
 import { createClient } from 'graphql-ws';
 import WebSocket from 'ws';
 
-const SCOREBOARD = 'status period home away clock { running seconds updatedAt } lastEvent { type side minute }';
+const SCOREBOARD = 'status kickoff period home away clock { running seconds updatedAt } lastEvent { type side minute }';
 const TEAM = 'possession touches shots shotsOnTarget passes corners fouls';
 const STATS = `home { ${TEAM} } away { ${TEAM} } players { id touches passes shots }`;
 

@@ -15,9 +15,36 @@ export const MATCHES = {
 };
 export const playersOf = matchId => MATCHES[matchId]?.players ?? MATCHES.m1.players;
 
+// ---- Ciclo de vida: quando vale assinar --------------------------------------
+// O horário de início decide quando começar a assinar; o status só decide quando
+// parar. Antes de kickoff − LIVE_LEAD_MS basta a query; a partir daí, subscription
+// até FULL_TIME (atrasos ficam cobertos: o cliente já está assinando). O mesmo
+// valor limita o cache do placar (scoreboardMaxAge), então nenhum cache serve
+// "não começou" depois da hora de começar a assinar.
+export const LIVE_LEAD_MS = 15 * 60_000;
+
+// 'before': só query, assinar em subscribeAt; 'live': subscription; 'over': estado final.
+export function matchPhase({ status, kickoff }, now = Date.now(), lead = LIVE_LEAD_MS) {
+  if (status === 'FULL_TIME') return { phase: 'over' };
+  if (status !== 'SCHEDULED' || kickoff == null) return { phase: 'live' };   // sem horário: assina, por segurança
+  const subscribeAt = kickoff - lead;
+  return now < subscribeAt ? { phase: 'before', subscribeAt } : { phase: 'live' };
+}
+
+// Cache-Control (segundos) da query do placar, pelo status:
+//   SCHEDULED antes da janela: até `scheduled`, mas nunca além de kickoff − lead;
+//   na janela, ao vivo ou no intervalo: `live` (curto);  FULL_TIME: `final` (longo).
+export function scoreboardMaxAge(state, now, { live, scheduled = 300, final = 3600, lead = LIVE_LEAD_MS } = {}) {
+  const { phase, subscribeAt } = matchPhase(state, now, lead);
+  if (phase === 'over') return final;
+  if (phase === 'before') return Math.min(scheduled, Math.floor((subscribeAt - now) / 1000));
+  return live;
+}
+
 // ---- Placar: pequeno, muda pouco, precisa chegar rápido -------------------------
-export const initialScoreboard = () => ({
-  status: 'SCHEDULED', period: 0, home: 0, away: 0,
+const kickoffOf = matchId => (MATCHES[matchId] ? Date.parse(MATCHES[matchId].kickoff) : null);
+export const initialScoreboard = matchId => ({
+  status: 'SCHEDULED', period: 0, home: 0, away: 0, kickoff: kickoffOf(matchId),
   // O relógio não é enviado a cada segundo: o cliente avança `seconds` a partir de
   // `updatedAt` enquanto `running`. Só início, pausa e fim geram commit.
   clock: { running: false, seconds: 0, updatedAt: 0 },
@@ -29,6 +56,12 @@ export function clockSeconds(clock, now = Date.now()) {
 }
 
 export const scoreboardOps = {
+  // Agenda ou remarca o início (epoch ms); só antes de começar.
+  scheduleMatch(state, { kickoff }) {
+    if (state.status !== 'SCHEDULED') throw new SyncError('Partida já começou', 'BAD_USER_INPUT');
+    if (!Number.isFinite(kickoff)) throw new SyncError('kickoff inválido', 'BAD_USER_INPUT');
+    state.kickoff = kickoff;
+  },
   startPeriod(state, { period }, now) {
     if (!Number.isInteger(period) || period < 1 || period > 2) throw new SyncError('Período inválido', 'BAD_USER_INPUT');
     state.status = 'LIVE'; state.period = period;

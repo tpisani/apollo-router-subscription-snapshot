@@ -37,9 +37,12 @@ export class StateSync {
 
 export const statsFromWire = ({ players, ...teams }) => ({ ...teams, players: Object.fromEntries(players.map(({ id, ...p }) => [id, p])) });
 export const createSync = (channel, options) => new StateSync({ ...options, fromWire: channel === 'stats' ? statsFromWire : undefined });
+// O placar no FULL_TIME é final: o subgraph encerra o stream e o cliente não reconecta.
+export const isFinalScoreboard = state => state?.status === 'FULL_TIME';
 
-// Uma conexão do stream; frames processados em ordem.
-export async function runSession(sync, frames, { onUpdate = () => {} } = {}) {
+// Uma conexão do stream; frames processados em ordem. Devolve 'final' quando o
+// estado é final (isFinal); senão o fim do stream é falha e o chamador reconecta.
+export async function runSession(sync, frames, { onUpdate = () => {}, isFinal = () => false } = {}) {
   sync.synced = false;
   const iterator = frames[Symbol.asyncIterator]();
   if (sync.version === null) {
@@ -51,9 +54,13 @@ export async function runSession(sync, frames, { onUpdate = () => {} } = {}) {
   try {
     while (true) {
       const next = await iterator.next();
-      if (next.done) throw new Error('Stream encerrado; reconectar');
+      if (next.done) {
+        if (isFinal(sync.state)) return 'final';
+        throw new Error('Stream encerrado; reconectar');
+      }
       await sync.accept(next.value);
       onUpdate(sync.view());
+      if (isFinal(sync.state)) return 'final';
     }
   } finally { await iterator.return?.(); }
 }
@@ -62,7 +69,8 @@ const backoff = attempt => Math.min(10_000, 200 * 2 ** attempt) * (0.5 + Math.ra
 
 // Reconexão com backoff e watchdog (sem frame em stallMs = conexão morta). O
 // estado é mantido; a retomada é o próximo frame (retido pelo edge/Router ou periódico).
-export async function runSync({ sync, connect, signal, stallMs = 5000, onUpdate = () => {}, onError = () => {}, wait = backoff }) {
+// Termina quando o estado fica final (isFinal) ou com signal.
+export async function runSync({ sync, connect, signal, stallMs = 5000, onUpdate = () => {}, onError = () => {}, wait = backoff, isFinal = () => false }) {
   let attempt = 0;
   while (!signal?.aborted) {
     const session = new AbortController();
@@ -74,7 +82,8 @@ export async function runSync({ sync, connect, signal, stallMs = 5000, onUpdate 
       else if (Date.now() - lastFrame > stallMs) session.abort(new Error('Stream parado'));
     }, Math.min(1000, stallMs / 2));
     try {
-      await runSession(sync, connect(session.signal), { onUpdate: view => { lastFrame = Date.now(); attempt = 0; onUpdate(view); } });
+      const outcome = await runSession(sync, connect(session.signal), { isFinal, onUpdate: view => { lastFrame = Date.now(); attempt = 0; onUpdate(view); } });
+      if (outcome === 'final') break;
     } catch (error) {
       if (signal?.aborted) break;
       onError(session.signal.aborted && session.signal.reason instanceof Error ? session.signal.reason : error, attempt);

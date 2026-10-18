@@ -63,7 +63,8 @@ export async function startEdge({
           for (const subscriber of stream.subscribers) subscriber.write(part({ payload: result }));
         },
         error: error => close({ payload: null, errors: [{ message: error?.message ?? 'Upstream encerrado' }] }),
-        complete: () => close({ payload: null, errors: [{ message: 'Upstream encerrado' }] })
+        // Fim normal (ex.: placar no FULL_TIME): fecha o multipart sem erro, como o Router.
+        complete: () => close(null)
       });
     }
     res.writeHead(200, { 'content-type': 'multipart/mixed;boundary="graphql";subscriptionSpec="1.0"', 'cache-control': 'no-store' });

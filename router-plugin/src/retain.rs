@@ -9,6 +9,9 @@
 //! Por isso o frame retido entra depois do item 1: inserido antes, ele viraria o
 //! marcador e se perderia.
 //!
+//! O assinante sai do Store no fim do stream ou quando o cliente é descartado, o
+//! que vier primeiro.
+//!
 //! Só é correto porque todo frame traz o estado inteiro e uma versão: um frame
 //! retido mais velho que um em trânsito é ignorado pelo cliente.
 
@@ -151,11 +154,20 @@ pub fn retain_stream(
                 frame.extensions.insert(RETAINED_EXTENSION, true.into());
                 frame
             });
-            let events = rest.map(move |frame| {
-                if is_event(&frame) {
-                    subscription.retain(&frame);
+            // O assinante sai do Store quando o stream termina (item final com
+            // subscribed: false, ou fim do stream), não só quando o cliente é
+            // descartado: quem chega depois do fim do upstream não pode receber um
+            // frame retido dele.
+            let events = stream::unfold((rest, Some(subscription)), |(mut rest, mut subscription)| async move {
+                let frame = rest.next().await?;
+                if frame.subscribed == Some(false) {
+                    subscription = None;
+                } else if let Some(subscription) = &subscription {
+                    if is_event(&frame) {
+                        subscription.retain(&frame);
+                    }
                 }
-                frame
+                Some((frame, (rest, subscription)))
             });
             stream::once(async { first }).chain(stream::iter(retained)).chain(events).boxed()
         })
@@ -274,7 +286,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn erros_e_marcador_final_nao_sao_retidos() {
+    async fn erros_nao_sao_retidos_e_o_item_final_libera() {
         let store = Arc::<Store<graphql::Response>>::default();
         let error = graphql::Response::builder()
             .data(json!({ "scoreboardUpdates": null }))
@@ -283,10 +295,12 @@ mod tests {
             .build();
         let (_tx, rx) = futures::channel::mpsc::unbounded();
         let mut a = retain_stream(stream::iter(vec![marker(), event(1), error, end()]).chain(rx).boxed(), store.clone(), "k".into());
-        for _ in 0..4 {
+        for _ in 0..3 {
             a.next().await;
         }
-        assert_eq!(store.retained("k").as_ref().and_then(version), Some(1));
+        assert_eq!(store.retained("k").as_ref().and_then(version), Some(1), "o erro não substitui o retido");
+        a.next().await;
+        assert_eq!(store.len(), 0, "o item final libera a entrada");
     }
 
     #[tokio::test]
@@ -304,6 +318,26 @@ mod tests {
         assert_eq!(store.len(), 1, "b ainda assina");
         drop(b);
         assert_eq!(store.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn fim_do_stream_libera_a_entrada_mesmo_sem_descartar_o_cliente() {
+        let store = Arc::<Store<graphql::Response>>::default();
+        // Item final (subscribed: false), como o Router manda quando o upstream termina.
+        let mut a = retain_stream(upstream(vec![marker(), event(1), end()]), store.clone(), "k".into());
+        a.next().await;
+        a.next().await;
+        assert_eq!(store.len(), 1);
+        a.next().await;
+        assert_eq!(store.len(), 0, "liberado no item final, com o stream ainda vivo");
+        // Fim do stream sem item final.
+        let mut b = retain_stream(upstream(vec![marker(), event(2)]), store.clone(), "k".into());
+        b.next().await;
+        b.next().await;
+        assert!(b.next().await.is_none());
+        assert_eq!(store.len(), 0, "liberado no fim do stream");
+        let frames: Vec<_> = retain_stream(upstream(vec![marker()]), store.clone(), "k".into()).collect().await;
+        assert!(frames.iter().all(|f| !retained(f)), "quem chega depois não recebe frame do upstream encerrado");
     }
 
     #[tokio::test]

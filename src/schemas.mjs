@@ -10,7 +10,8 @@ export const scoresSDL = `
   "seconds vale no instante updatedAt (epoch ms); com running, o cliente avança sozinho."
   type Clock { running: Boolean!, seconds: Int!, updatedAt: Float! }
   type ScoreEvent { type: String!, side: Side, minute: Int! }
-  type Scoreboard { status: MatchStatus!, period: Int!, home: Int!, away: Int!, clock: Clock!, lastEvent: ScoreEvent }
+  "kickoff: início previsto (epoch ms). O cliente assina a partir de kickoff − 15 min e para no FULL_TIME."
+  type Scoreboard { status: MatchStatus!, kickoff: Float, period: Int!, home: Int!, away: Int!, clock: Clock!, lastEvent: ScoreEvent }
   type ScoreboardSnapshot { matchId: ID!, version: Int!, state: Scoreboard! }
   type ScoreboardFrame {
     matchId: ID!
@@ -29,9 +30,10 @@ export const scoresSDL = `
     startPeriod(matchId: ID!, period: Int!): ScoreboardSnapshot!
     endPeriod(matchId: ID!, final: Boolean! = false): ScoreboardSnapshot!
     scoreGoal(matchId: ID!, side: Side!): ScoreboardSnapshot!
+    scheduleMatch(matchId: ID!, kickoff: Float!): ScoreboardSnapshot!
   }
   type Subscription {
-    "Estado inteiro a cada mudança e a cada segundo. Mesmas variáveis para todos: deduplicável."
+    "Estado inteiro a cada mudança e a cada segundo. Mesmas variáveis para todos: deduplicável. Termina depois do frame FULL_TIME."
     scoreboardUpdates(matchId: ID!): ScoreboardFrame!
   }
 `;

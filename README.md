@@ -21,6 +21,10 @@ deduplicação e o cache do Router.
 - **Uma lista de jogos assina só o placar** e não recebe nenhum byte de
   estatísticas.
 
+- **Ciclo de vida:** partida agendada ou encerrada usa só a query; a subscription
+  começa 15 min antes do início e termina no `FULL_TIME`. O cache do status nunca
+  atrasa o início ([página](docs/cenarios/status-e-kickoff.html)).
+
 Cenários passo a passo, interativos: [`docs/cenarios/`](docs/cenarios/).
 Por que dois canais, estado inteiro, retenção e várias instâncias, com os experimentos:
 [`docs/design.md`](docs/design.md). O que foi executado:
@@ -108,8 +112,8 @@ Detalhes em [`router-plugin/README.md`](router-plugin/README.md).
 ## Testes, experimentos e benchmark
 
 ```bash
-npm test                 # 37 testes: domínio, canais, cliente, experimentos, ponta a ponta e várias instâncias
-(cd router-plugin && cargo test --release)   # 7 testes de unidade do plugin
+npm test                 # 44 testes: domínio, canais, cliente, experimentos, ponta a ponta e várias instâncias
+(cd router-plugin && cargo test --release)   # 8 testes de unidade do plugin
 npm run bench            # partida simulada pelo edge: 100 clientes só de placar + 50 completos
 EDGES=3 npm run bench    # o mesmo com 3 instâncias atrás de um balanceador
 SCORE_ONLY=0 FULL=200 STORM_RATE=400 npm run bench

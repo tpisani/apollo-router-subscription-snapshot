@@ -7,14 +7,17 @@ import { useServer } from 'graphql-ws/use/ws';
 import { Store, SnapshotCache, SyncError } from './store.mjs';
 import { ChannelHub, LiveStream } from './channels.mjs';
 import { scoresSDL, statsSDL, catalogSDL } from './schemas.mjs';
-import { MATCHES, initialScoreboard, initialStats, scoreboardOps, applyStatEvents } from './sports.mjs';
+import { MATCHES, initialScoreboard, initialStats, scoreboardOps, applyStatEvents, scoreboardMaxAge, LIVE_LEAD_MS } from './sports.mjs';
 
 // TTLs que cada subgraph declara via Cache-Control. Todos são seguros pelo contrato
 // ">= minVersion"; o valor só decide quão antiga pode vir a base provisória.
 export const TTL = {
   scoreboardShared: 2, statsShared: 5,   // minVersion 0: chave compartilhada, render imediato
   bounded: 60,                           // minVersion > 0: chave nova a cada versão pedida
-  catalog: 3600                          // times e elencos
+  catalog: 3600,                         // times e elencos
+  // Placar por status (scoreboardMaxAge): antes da janela de início, até 5 min mas
+  // nunca além de kickoff − lead; FULL_TIME é final.
+  scheduled: 300, final: 3600
 };
 
 function wrap(fn) {
@@ -34,7 +37,9 @@ function channelMetrics() {
   return { commits: 0, snapshotRequests: 0, streamsOpened: 0, activeStreams: 0, activeByMatch: {}, framesEmitted: 0, framesSent: 0, merges: 0 };
 }
 
-function liveField(hub, metrics, resolve) {
+// isFinal(frame): depois desse frame o stream termina (o placar no FULL_TIME). O
+// Router repassa o fim a todos os clientes deduplicados e fecha o upstream.
+function liveField(hub, metrics, resolve, { isFinal = () => false } = {}) {
   return {
     subscribe: wrap((_, { matchId }) => {
       if (typeof matchId !== 'string' || !matchId || matchId.length > 100) throw new SyncError('Partida inválida', 'BAD_USER_INPUT');
@@ -45,8 +50,14 @@ function liveField(hub, metrics, resolve) {
         if (!--metrics.activeByMatch[matchId]) delete metrics.activeByMatch[matchId];
       };
       const stream = new LiveStream({ hub, key: matchId, onClose, onMerge: () => metrics.merges++ });
+      let finished = false;
       return {
-        async next() { const result = await stream.next(); if (!result.done) metrics.framesSent++; return result; },
+        async next() {
+          if (finished) return stream.return();
+          const result = await stream.next();
+          if (!result.done) { metrics.framesSent++; finished = isFinal(result.value); }
+          return result;
+        },
         return: () => stream.return(),
         throw: error => stream.throw(error),
         [Symbol.asyncIterator]() { return this; }
@@ -56,7 +67,7 @@ function liveField(hub, metrics, resolve) {
   };
 }
 
-export function createScoresSchema({ store, snapshots, hub, metrics }) {
+export function createScoresSchema({ store, snapshots, hub, metrics, now = Date.now, lead = LIVE_LEAD_MS }) {
   const mutate = (op) => wrap((_, args) => {
     const change = store.update(args.matchId, state => scoreboardOps[op](state, args, store.clock()));
     return change ? { matchId: args.matchId, version: change.version, state: change.state } : { matchId: args.matchId, ...store.read(args.matchId) };
@@ -67,12 +78,12 @@ export function createScoresSchema({ store, snapshots, hub, metrics }) {
         metrics.snapshotRequests++;
         const min = minVersionOf(minVersion);
         const doc = snapshots.get(matchId, min);
-        hint(context, min === 0 ? TTL.scoreboardShared : TTL.bounded);
+        hint(context, scoreboardMaxAge(doc.state, now(), { live: min === 0 ? TTL.scoreboardShared : TTL.bounded, scheduled: TTL.scheduled, final: TTL.final, lead }));
         return { matchId, version: doc.version, state: doc.state };
       })
     },
-    Mutation: { startPeriod: mutate('startPeriod'), endPeriod: mutate('endPeriod'), scoreGoal: mutate('scoreGoal') },
-    Subscription: { scoreboardUpdates: liveField(hub, metrics, frame => frame) }
+    Mutation: { startPeriod: mutate('startPeriod'), endPeriod: mutate('endPeriod'), scoreGoal: mutate('scoreGoal'), scheduleMatch: mutate('scheduleMatch') },
+    Subscription: { scoreboardUpdates: liveField(hub, metrics, frame => frame, { isFinal: frame => frame.state.status === 'FULL_TIME' }) }
   } }]);
 }
 
@@ -186,7 +197,8 @@ const listen = (server, port, host) => new Promise((resolve, reject) => {
 // Os três subgraphs num processo (por conveniência local), cada um com seu banco.
 export async function startSubgraphs({
   dataDir = null, ports = { scores: 4001, catalog: 4002, stats: 4003 }, host = '0.0.0.0',
-  scoreboard = { periodicMs: 1000 }, stats = { periodicMs: 1000, throttleMs: 500 }, snapshotTtlMs = 1000
+  scoreboard = { periodicMs: 1000 }, stats = { periodicMs: 1000, throttleMs: 500 }, snapshotTtlMs = 1000,
+  liveLeadMs = LIVE_LEAD_MS, now = Date.now
 } = {}) {
   const dbPath = name => (dataDir ? join(dataDir, `${name}.sqlite`) : ':memory:');
   const metrics = { scoreboard: channelMetrics(), stats: channelMetrics() };
@@ -205,7 +217,7 @@ export async function startSubgraphs({
     if (req.method !== 'GET' || req.url !== '/metrics') return false;
     res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(current())); return true;
   };
-  const scoresSchema = createScoresSchema({ store: stores.scoreboard, snapshots: snapshots.scoreboard, hub: hubs.scoreboard, metrics: metrics.scoreboard });
+  const scoresSchema = createScoresSchema({ store: stores.scoreboard, snapshots: snapshots.scoreboard, hub: hubs.scoreboard, metrics: metrics.scoreboard, now, lead: liveLeadMs });
   const statsSchema = createStatsSchema({ store: stores.stats, snapshots: snapshots.stats, hub: hubs.stats, metrics: metrics.stats });
   const servers = {
     scores: createServer(graphqlHandler(scoresSchema, withMetrics)),

@@ -23,7 +23,7 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
-const SCOREBOARD: &str = "subscription Scoreboard($matchId: ID!) { scoreboardUpdates(matchId: $matchId) { matchId version state { home away } } }";
+const SCOREBOARD: &str = "subscription Scoreboard($matchId: ID!) { scoreboardUpdates(matchId: $matchId) { matchId version state { status home away } } }";
 
 fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("defina {name} (ou use npm run test:router-harness)"))
@@ -134,6 +134,21 @@ async fn until_upstreams(match_id: &str, expected: i64) {
 
 const START: &str = "mutation($m: ID!) { startPeriod(matchId: $m, period: 1) { version } }";
 const GOAL: &str = "mutation($m: ID!) { scoreGoal(matchId: $m, side: HOME) { version } }";
+const FINISH: &str = "mutation($m: ID!) { endPeriod(matchId: $m, final: true) { version } }";
+
+/// O stream do cliente termina (o multipart fecha) em até 5 s, sem mais frames com dados.
+async fn ends(stream: &mut (impl Stream<Item = Value> + Unpin)) -> Vec<Value> {
+    let mut rest = Vec::new();
+    loop {
+        match timeout(Duration::from_secs(5), stream.next()).await.expect("o stream não terminou em 5 s") {
+            Some(frame) => rest.push(frame),
+            None => return rest,
+        }
+    }
+}
+fn status(payload: &Value) -> &str {
+    payload["data"]["scoreboardUpdates"]["state"]["status"].as_str().unwrap_or("")
+}
 
 fn unique(prefix: &str) -> String {
     format!("{prefix}-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis())
@@ -215,4 +230,36 @@ async fn identidades_diferentes_nao_compartilham_upstream_nem_frame() {
     assert!(!retained(&fb), "b (outro token) não recebe o frame de a");
     assert!(retained(&fa2), "a2 (mesmo token de a1) recebe o frame retido");
     until_upstreams(&match_id, 2).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "precisa dos subgraphs (npm run test:router-harness)"]
+async fn full_time_encerra_os_clientes_deduplicados_e_limpa_a_retencao() {
+    let router = harness(true).await;
+    let match_id = unique("harness-fim");
+    mutate(&router, START, &match_id).await;
+    let mut a = subscribe(&router, &match_id, None).await;
+    next_frame(&mut a).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let mut b = subscribe(&router, &match_id, None).await;
+    assert!(retained(&next_frame(&mut b).await));
+    assert_eq!(upstreams(&match_id).await, 1);
+
+    // O subgraph manda o frame FULL_TIME e encerra; o Router fecha os dois clientes.
+    mutate(&router, FINISH, &match_id).await;
+    for stream in [&mut a, &mut b] {
+        let rest = ends(stream).await;
+        let last = rest.iter().rev().find(|f| f["data"].is_object()).expect("frame FULL_TIME antes do fim");
+        assert_eq!(status(last), "FULL_TIME");
+    }
+    until_upstreams(&match_id, 0).await;
+
+    // Quem chega depois do fim recebe o estado final do subgraph (não um frame retido
+    // de um upstream que já fechou) e o stream termina em seguida.
+    let mut c = subscribe(&router, &match_id, None).await;
+    let first = next_frame(&mut c).await;
+    assert!(!retained(&first), "a retenção foi limpa com o upstream");
+    assert_eq!(status(&first), "FULL_TIME");
+    ends(&mut c).await;
+    until_upstreams(&match_id, 0).await;
 }

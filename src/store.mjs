@@ -31,7 +31,7 @@ export class Store {
   read(key) {
     this.#check(key);
     const row = this.q.get.get(key);
-    return row ? { key, version: row.version, state: JSON.parse(row.state) } : { key, version: 0, state: this.initial() };
+    return row ? { key, version: row.version, state: JSON.parse(row.state) } : { key, version: 0, state: this.initial(key) };
   }
 
   version(key) { return this.read(key).version; }

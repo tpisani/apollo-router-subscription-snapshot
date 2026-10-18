@@ -3,7 +3,7 @@
 Ambiente: Linux, Node.js 22.22.0, Hive Gateway 2.15.2, Apollo Router 2.10.0
 (validação de config), apollo-router 2.10.5 com o plugin (Rust 1.97), Docker 29.8.
 
-## Testes (`npm test`: 37 aprovados)
+## Testes (`npm test`: 44 aprovados)
 
 - **`tests/domain.test.mjs` (8):**
   - patches e a propriedade de sobreposição (usados no modo `delta` dos
@@ -84,6 +84,24 @@ o upstream extra continua aberto. No modo callback, 0 de 6. Não afeta a correç
 versão), só a eficiência. O roteiro registra `upstreamsExtras` e só reprova se
 não houver deduplicação.
 
+- **`tests/lifecycle.test.mjs` (7), 3 execuções seguidas:** o ciclo de vida da
+  partida pelo edge, com o cache de queries no pior caso (nunca expira) e janela de
+  1 s:
+  - regras com relógio fixo: fase por horário e status; TTL do `SCHEDULED` limitado
+    pela janela, verificado como propriedade em todo instante antes dela;
+  - `Cache-Control` real do subgraph: 300 s longe, ≤ o tempo até a janela perto,
+    2 s na janela, 3600 s no `FULL_TIME`;
+  - encerrada: 1 query por canal, 0 subscriptions;
+  - agendada com `SCHEDULED` antigo no cache: 0 streams antes da janela, assinou
+    menos de 500 ms depois dela; jogo atrasado segue assinando; `FULL_TIME` fecha
+    os dois canais sem reconexão;
+  - cache antigo dizendo `LIVE`: o primeiro frame traz `FULL_TIME` e tudo fecha em
+    menos de 1 s;
+  - 5 clientes deduplicados: o `FULL_TIME` encerra todos e o upstream fecha.
+
+  **Mutações conferidas:** tirar o teto do TTL do `SCHEDULED` reprova 2 testes;
+  decidir só pelo status (ignorando o horário) reprova 4, inclusive o de cache
+  antigo.
 - **`tests/callback.test.mjs` (1):** o protocolo callback/1.0 do lado do
   subgraph, contra um `/callback` falso: `check` antes de responder
   `{ data: null }`, frames como `next`, e um 404 do Router fecha o stream sem
@@ -91,13 +109,20 @@ não houver deduplicação.
 
 ## Plugin do Router (`router-plugin/`, `poc.retain_last_frame`)
 
-- **`cargo test --release` (7):** o marcador passa intacto; o primeiro assinante
+- **`cargo test --release` (8):** inclui a liberação no fim do stream; o marcador passa intacto; o primeiro assinante
   não recebe frame retido e alimenta o store; o late joiner recebe o retido logo
   depois do marcador, com `subscribed` aberto, e depois os eventos ao vivo;
   chaves diferentes não compartilham; erros e o item final não são retidos; a
   entrada some quando o último assinante sai; respostas que não são subscription
   aberta passam intactas; a chave inclui variáveis e identidade.
-- **`npm run test:router-harness` (3), 3 execuções seguidas:** o plugin no
+- **`npm run test:router-harness` (4):** o quarto teste, `FULL_TIME` no
+  pipeline do Router: os dois clientes deduplicados recebem o frame final e o
+  multipart fecha; o upstream fecha; quem chega depois recebe o estado final do
+  subgraph e o stream termina. Esse teste achou um problema no plugin: a entrada
+  retida só saía quando o cliente era descartado, não quando o stream terminava,
+  e um cliente novo recebia o frame de um upstream já fechado. Corrigido (a entrada
+  sai no item final ou no fim do stream), com teste de unidade.
+- **`npm run test:router-harness` (3 primeiros), 3 execuções seguidas:** o plugin no
   pipeline do Router pelo `TestHarness` do crate (router service, deduplicação,
   passthrough `graphql_ws` para os subgraphs Node, multipart), frame periódico de
   3 s:

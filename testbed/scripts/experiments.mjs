@@ -2,22 +2,22 @@ import { Store } from '../subgraphs/store.mjs';
 import { ChannelHub } from '../subgraphs/channels.mjs';
 import { initialScoreboard, initialStats, scoreboardOps, applyStatEvents, playGenerator } from '../subgraphs/sports.mjs';
 
-// Experimentos de desenho com os hubs reais e tempo simulado (o chamador controla
-// o relógio, ex.: mock.timers do node:test). Gera uma partida e devolve, para
-// cada política, os frames que um assinante receberia, com instante e tamanho
-// em bytes no formato entregue (multipart do Router: {"payload":{"data":...}}).
+// Design experiments with the real hubs and simulated time (the caller controls
+// the clock, e.g. node:test's mock.timers). Generates a match and returns, for
+// each policy, the frames a subscriber would get, with the instant and size
+// in bytes in the delivered format (the Router's multipart: {"payload":{"data":...}}).
 const statsOut = state => ({ ...state, players: Object.entries(state.players).map(([id, p]) => ({ id, ...p })) });
 const wire = (field, frame) => JSON.stringify({ payload: { data: { [field]: frame } } }).length;
 
 export const STATS_POLICIES = {
-  'estado inteiro a cada lance': { coalesceMs: 0, full: true },
-  'estado inteiro a cada 500 ms': { coalesceMs: 500, full: true },
-  'patch a cada lance': { coalesceMs: 0, full: false, adaptive: false },
-  'patch a cada 500 ms': { coalesceMs: 500, full: false, adaptive: false },
-  'o menor por janela de 500 ms (adotado)': { coalesceMs: 500, full: false, adaptive: true }
+  'full state on every play': { coalesceMs: 0, full: true },
+  'full state every 500 ms': { coalesceMs: 500, full: true },
+  'patch on every play': { coalesceMs: 0, full: false, adaptive: false },
+  'patch every 500 ms': { coalesceMs: 500, full: false, adaptive: false },
+  'the smaller one per 500 ms window (adopted)': { coalesceMs: 500, full: false, adaptive: true }
 };
 
-// timeline: [{ at: ms, type: 'goal' | 'stats', count }] além do ritmo base.
+// timeline: [{ at: ms, type: 'goal' | 'stats', count }] on top of the base pace.
 export function simulateMatch({ tick, now, seconds = 60, eventsPerSecond = 20, storms = [], goals = [], stepMs = 50 }) {
   const matchId = 'm1';
   const out = { scoreboard: [], stats: Object.fromEntries(Object.keys(STATS_POLICIES).map(k => [k, []])), commits: { scoreboard: [], stats: [] } };
@@ -30,7 +30,7 @@ export function simulateMatch({ tick, now, seconds = 60, eventsPerSecond = 20, s
     const hub = new ChannelHub({ store: stats, mode: 'delta', periodicMs: 1000, coalesceMs: policy.coalesceMs, adaptive: policy.adaptive ?? false });
     hubs.push(hub);
     hub.subscribe(matchId, frame => {
-      // Política "estado inteiro": no instante do frame o store está exatamente na versão dele.
+      // "Full state" policy: at the frame's instant the store is exactly at its version.
       const body = (policy.full && frame.kind === 'DELTA') || frame.kind === 'STATE'
         ? { matchId, kind: 'STATE', version: frame.version, committedAt: frame.committedAt, state: statsOut(stats.read(matchId).state) }
         : frame;
@@ -58,8 +58,9 @@ export function simulateMatch({ tick, now, seconds = 60, eventsPerSecond = 20, s
 
 export const rate = (frames, elapsed) => ({ framesPerSecond: +(frames.length / elapsed).toFixed(1), bytesPerSecond: Math.round(frames.reduce((n, f) => n + f.bytes, 0) / elapsed) });
 
-// Modelo de enlace FIFO com banda fixa (ex.: celular ruim): um frame só começa a
-// ser transmitido quando o anterior terminou. Devolve o instante de chegada de cada frame.
+// FIFO link model with fixed bandwidth (e.g. a bad mobile connection): a frame only starts
+// being transmitted when the previous one is done. Returns each frame's arrival instant.
+
 export function throughLink(frames, bytesPerSecond) {
   let free = 0;
   return [...frames].sort((a, b) => a.t - b.t).map(frame => {

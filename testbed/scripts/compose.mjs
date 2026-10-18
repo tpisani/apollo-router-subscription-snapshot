@@ -3,8 +3,8 @@ import { parse } from 'graphql';
 import { writeFileSync } from 'node:fs';
 import { scoresSDL, statsSDL, catalogSDL } from '../subgraphs/schemas.mjs';
 
-// Supergraph para o Hive Gateway e o Apollo Router: placar e estatísticas em
-// subgraphs separados, cada um com sua subscription.
+// Supergraph for Hive Gateway and the Apollo Router: scoreboard and stats in
+// separate subgraphs, each with its own subscription.
 export function composeSupergraph({
   scoresUrl = process.env.SCORES_URL ?? 'http://localhost:4001/graphql',
   catalogUrl = process.env.CATALOG_URL ?? 'http://localhost:4002/graphql',
@@ -22,5 +22,6 @@ export function composeSupergraph({
 if (import.meta.url === `file://${process.argv[1]}`) {
   const out = process.argv[2] ?? 'gateway/supergraph.graphql';
   writeFileSync(out, composeSupergraph());
-  console.log(`Supergraph composto em ${out}`);
+  console.log(`Supergraph composed into ${out}`
+);
 }

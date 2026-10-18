@@ -9,14 +9,14 @@ import { ChannelHub, LiveStream } from './channels.mjs';
 import { scoresSDL, statsSDL, catalogSDL } from './schemas.mjs';
 import { MATCHES, initialScoreboard, initialStats, scoreboardOps, applyStatEvents, scoreboardMaxAge, LIVE_LEAD_MS } from './sports.mjs';
 
-// TTLs que cada subgraph declara via Cache-Control. Todos são seguros pelo contrato
-// ">= minVersion"; o valor só decide quão antiga pode vir a base provisória.
+// TTLs each subgraph declares through Cache-Control. All of them are safe under the
+// ">= minVersion" contract; the value only decides how old the provisional base can be.
 export const TTL = {
-  scoreboardShared: 2, statsShared: 5,   // minVersion 0: chave compartilhada, render imediato
-  bounded: 60,                           // minVersion > 0: chave nova a cada versão pedida
-  catalog: 3600,                         // times e elencos
-  // Placar por status (scoreboardMaxAge): antes da janela de início, até 5 min mas
-  // nunca além de kickoff − lead; FULL_TIME é final.
+  scoreboardShared: 2, statsShared: 5,   // minVersion 0: shared key, immediate render
+  bounded: 60,                           // minVersion > 0: a new key for each requested version
+  catalog: 3600,                         // teams and squads
+  // Scoreboard by status (scoreboardMaxAge): before the kickoff window, up to 5 min but
+  // never past kickoff − lead; FULL_TIME is final.
   scheduled: 300, final: 3600
 };
 
@@ -28,7 +28,7 @@ function wrap(fn) {
 }
 const hint = (context, seconds) => context?.cacheHints?.push(seconds);
 const minVersionOf = value => {
-  if (!Number.isSafeInteger(value) || value < 0) throw new SyncError('minVersion inválido', 'BAD_USER_INPUT');
+  if (!Number.isSafeInteger(value) || value < 0) throw new SyncError('Invalid minVersion', 'BAD_USER_INPUT');
   return value;
 };
 const statsOut = state => ({ ...state, players: Object.entries(state.players).map(([id, p]) => ({ id, ...p })) });
@@ -37,12 +37,12 @@ function channelMetrics() {
   return { commits: 0, snapshotRequests: 0, streamsOpened: 0, activeStreams: 0, activeByMatch: {}, framesEmitted: 0, framesSent: 0, merges: 0 };
 }
 
-// isFinal(frame): depois desse frame o stream termina (o placar no FULL_TIME). O
-// Router repassa o fim a todos os clientes deduplicados e fecha o upstream.
+// isFinal(frame): the stream ends after this frame (the scoreboard at FULL_TIME). The
+// Router forwards the end to every deduplicated client and closes the upstream.
 function liveField(hub, metrics, resolve, { isFinal = () => false } = {}) {
   return {
     subscribe: wrap((_, { matchId }) => {
-      if (typeof matchId !== 'string' || !matchId || matchId.length > 100) throw new SyncError('Partida inválida', 'BAD_USER_INPUT');
+      if (typeof matchId !== 'string' || !matchId || matchId.length > 100) throw new SyncError('Invalid match', 'BAD_USER_INPUT');
       metrics.streamsOpened++; metrics.activeStreams++;
       metrics.activeByMatch[matchId] = (metrics.activeByMatch[matchId] ?? 0) + 1;
       const onClose = () => {
@@ -100,7 +100,7 @@ export function createStatsSchema({ store, snapshots, hub, metrics }) {
     },
     Mutation: {
       recordStats: wrap((_, { matchId, events }) => {
-        if (events.length > 1000) throw new SyncError('Lote grande demais', 'BAD_USER_INPUT');
+        if (events.length > 1000) throw new SyncError('Batch too large', 'BAD_USER_INPUT');
         return (store.update(matchId, state => applyStatEvents(state, events, matchId)) ?? store.read(matchId)).version;
       })
     },
@@ -120,11 +120,11 @@ export function createCatalogSchema() {
   } }]);
 }
 
-// Modo callback do Apollo Router (protocolo callback/1.0): a requisição da subscription
-// chega por HTTP com extensions.subscription { callbackUrl, subscriptionId, verifier,
-// heartbeatIntervalMs }. O subgraph confirma com "check", responde { data: null } e
-// passa a enviar cada evento como "next" para o callbackUrl. Um 404 do Router
-// (nenhum cliente mais nessa subscription) encerra o stream.
+// Apollo Router callback mode (callback/1.0 protocol): the subscription request
+// arrives over HTTP with extensions.subscription { callbackUrl, subscriptionId, verifier,
+// heartbeatIntervalMs }. The subgraph confirms with "check", replies { data: null } and
+// then sends each event as "next" to the callbackUrl. A 404 from the Router
+// (no client left on that subscription) ends the stream.
 async function callbackSubscription({ schema, document, body, res }) {
   const { callbackUrl, subscriptionId: id, verifier, heartbeatIntervalMs } = body.extensions.subscription;
   const send = message => fetch(callbackUrl, { method: 'POST', headers: { 'content-type': 'application/json' },
@@ -132,11 +132,11 @@ async function callbackSubscription({ schema, document, body, res }) {
   const check = await send({ action: 'check' }).catch(error => ({ ok: false, status: error.message }));
   if (check.status !== 204) {
     res.writeHead(400, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ errors: [{ message: `callback check falhou: ${check.status}` }] }));
+    res.end(JSON.stringify({ errors: [{ message: `callback check failed: ${check.status}` }] }));
     return;
   }
   const iterator = await subscribe({ schema, document, variableValues: body.variables, operationName: body.operationName });
-  if (!iterator[Symbol.asyncIterator]) {                      // erro antes de abrir (ex.: BAD_USER_INPUT)
+  if (!iterator[Symbol.asyncIterator]) {                      // error before opening (e.g. BAD_USER_INPUT)
     res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(iterator)); return;
   }
   res.writeHead(200, { 'content-type': 'application/json' });
@@ -150,7 +150,7 @@ async function callbackSubscription({ schema, document, body, res }) {
   try {
     for await (const result of iterator) {
       const response = await send({ action: 'next', payload: result }).catch(() => null);
-      if (!response || response.status === 404) { open = false; break; }   // Router sem essa subscription: encerra
+      if (!response || response.status === 404) { open = false; break; }   // Router no longer has this subscription: stop
     }
     if (open) await send({ action: 'complete' }).catch(() => {});
   } finally {
@@ -158,8 +158,8 @@ async function callbackSubscription({ schema, document, body, res }) {
   }
 }
 
-// Cache-Control por resposta = menor TTL entre os campos resolvidos. Sem dica,
-// com erro ou em mutation: no-store.
+// Cache-Control per response = the smallest TTL among the resolved fields. With no
+// hint, on error or on a mutation: no-store.
 function graphqlHandler(schema, extra = () => false) {
   return async (req, res) => {
     if (req.method === 'GET' && req.url === '/health') { res.end('ok'); return; }
@@ -194,7 +194,8 @@ const listen = (server, port, host) => new Promise((resolve, reject) => {
   server.once('error', reject); server.listen(port, host, () => resolve(server.address().port));
 });
 
-// Os três subgraphs num processo (por conveniência local), cada um com seu banco.
+// The three subgraphs in one process (for local convenience), each with its own database.
+
 export async function startSubgraphs({
   dataDir = null, ports = { scores: 4001, catalog: 4002, stats: 4003 }, host = '0.0.0.0',
   scoreboard = { periodicMs: 1000 }, stats = { periodicMs: 1000, throttleMs: 500 }, snapshotTtlMs = 1000,

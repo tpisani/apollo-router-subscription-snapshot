@@ -5,8 +5,8 @@ const SCOREBOARD = 'status kickoff period home away clock { running seconds upda
 const TEAM = 'possession touches shots shotsOnTarget passes corners fouls';
 const STATS = `home { ${TEAM} } away { ${TEAM} } players { id touches passes shots }`;
 
-// Uma subscription e uma query por canal. Todas as variáveis são só a partida,
-// então todo cliente da mesma partida manda a mesma operação: deduplicável.
+// One subscription and one query per channel. The only variable is the match,
+// so every client of the same match sends the same operation: deduplicable.
 export const CHANNELS = {
   scoreboard: {
     field: 'scoreboardUpdates',
@@ -48,13 +48,13 @@ export function snapshotApi(url, channel, matchId, { signal, headers, onBytes = 
   };
 }
 
-// Parser incremental de multipart/mixed (protocolo de subscriptions HTTP do Apollo Router).
+// Incremental multipart/mixed parser (the Apollo Router's HTTP subscription protocol).
 export async function* multipart(body, boundary) {
   const marker = `--${boundary}`;
   const decoder = new TextDecoder(); let pending = ''; let started = false;
   for await (const chunk of body) {
     pending += decoder.decode(chunk, { stream: true });
-    if (pending.length > 4_000_000) throw new Error('Parte multipart excedeu 4 MB');
+    if (pending.length > 4_000_000) throw new Error('Multipart part exceeded 4 MB');
     if (!started) {
       const start = pending.indexOf(marker);
       if (start < 0) continue;
@@ -70,13 +70,13 @@ export async function* multipart(body, boundary) {
       if (json) yield { message: JSON.parse(json), bytes: json.length };
     }
   }
-  throw new Error('Stream multipart interrompido');
+  throw new Error('Multipart stream interrupted');
 }
 
-const fail = errors => Object.assign(new Error(errors[0]?.message ?? 'Erro na subscription'), { code: errors[0]?.extensions?.code });
+const fail = errors => Object.assign(new Error(errors[0]?.message ?? 'Subscription error'), { code: errors[0]?.extensions?.code });
 
-// onBytes recebe o tamanho de cada frame entregue, para medir banda por canal.
-// onPayload recebe cada payload inteiro (ex.: extensions.snapshot do plugin do Router).
+// onBytes gets the size of each delivered frame, to measure bandwidth per channel.
+// onPayload gets each whole payload (e.g. extensions.snapshot from the Router plugin).
 export async function* multipartFrames(url, channel, matchId, { signal, headers = {}, onBytes = () => {}, onPayload = () => {} } = {}) {
   const { subscription, field } = CHANNELS[channel];
   const response = await fetch(url, { method: 'POST', signal,
@@ -86,7 +86,7 @@ export async function* multipartFrames(url, channel, matchId, { signal, headers 
   const boundary = /boundary\s*=\s*(?:"([^"]+)"|([^;\s]+))/i.exec(type);
   if (!response.ok || !boundary) throw new Error(`Subscription HTTP ${response.status}: ${await response.text()}`);
   for await (const { message, bytes } of multipart(response.body, boundary[1] ?? boundary[2])) {
-    if (message.errors?.length) throw fail(message.errors);       // erro de transporte do Router
+    if (message.errors?.length) throw fail(message.errors);       // Router transport error
     const payload = message.payload;
     if (!payload) continue;                                       // {} = heartbeat
     if (payload.errors?.length) throw fail(payload.errors);
@@ -106,7 +106,8 @@ export async function* wsFrames(url, channel, matchId, { signal, onBytes = () =>
       onBytes(JSON.stringify(result).length);
       yield result.data[field];
     }
-    if (signal?.aborted) throw new Error('Abortado');
+    if (signal?.aborted) throw new Error('Aborted'
+);
   } finally {
     signal?.removeEventListener('abort', abort);
     await iterator.return?.(); await client.dispose();

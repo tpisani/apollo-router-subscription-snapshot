@@ -1,23 +1,23 @@
 import { mergePatches } from './patch.mjs';
 
-// Um canal = um documento versionado por partida + uma política de envio.
+// A channel = one versioned document per match + a sending policy.
 //
-// mode 'state' (usado pelos dois canais: placar e estatísticas)
-//   STATE { version, state }: o estado inteiro. O mais novo substitui os anteriores,
-//   então perda, duplicata e late joiner se resolvem com o próximo frame, sem query,
-//   e o último frame pode ser retido e reenviado por quem estiver no meio (edge/Router).
-//   throttleMs = 0: um frame por commit, na hora (placar).
-//   throttleMs > 0: limitador. Se nada saiu nos últimos throttleMs, o frame sai na
-//   hora; senão sai no fim da janela com o estado mais recente (estatísticas: no
-//   máximo 2 frames/s numa rajada, latência de ms em jogo calmo).
-//   A cada periodicMs sai um STATE mesmo sem mudança: sinal de vida e estado para
-//   quem entrou num upstream já aberto.
+// mode 'state' (used by both channels: scoreboard and stats)
+//   STATE { version, state }: the full state. The newest replaces the previous ones,
+//   so loss, duplicates and late joiners are solved by the next frame, without a query,
+//   and the last frame can be retained and resent by whoever sits in between (edge/Router).
+//   throttleMs = 0: one frame per commit, right away (scoreboard).
+//   throttleMs > 0: limiter. If nothing went out in the last throttleMs, the frame goes
+//   out right away; otherwise it goes out at the end of the window with the latest state
+//   (stats: at most 2 frames/s in a burst, millisecond latency in a quiet game).
+//   Every periodicMs a STATE goes out even without changes: a liveness signal and the
+//   state for whoever joined an already open upstream.
 //
-// mode 'delta' (só nos experimentos de comparação, scripts/experiments.mjs)
-//   DELTA { from, version, patch } por janela de coalesceMs (ou STATE, se menor) e
-//   CHECKPOINT { version } periódico. Ficou registrado como alternativa medida.
+// mode 'delta' (only in the comparison experiments, scripts/experiments.mjs)
+//   DELTA { from, version, patch } per coalesceMs window (or STATE, if smaller) and a
+//   periodic CHECKPOINT { version }. Kept on record as a measured alternative.
 //
-// Os frames são iguais para todos os assinantes da partida: o Router deduplica.
+// Frames are the same for every subscriber of the match: the Router deduplicates.
 export class ChannelHub {
   constructor({ store, mode, periodicMs = 1000, throttleMs = 0, coalesceMs = 0, adaptive = true, now = () => Date.now(), onFrame = () => {} }) {
     Object.assign(this, { store, mode, periodicMs, throttleMs, coalesceMs, adaptive, now, onFrame });
@@ -46,8 +46,8 @@ export class ChannelHub {
 
   #checkpoint(entry, key) {
     if (this.mode === 'state') return { matchId: key, kind: 'STATE', version: entry.latest.version, state: entry.latest.state, committedAt: null };
-    // Só o que o stream já entregou, nunca o head: um commit ainda na janela não
-    // pode fazer o cliente achar que perdeu algo.
+    // Only what the stream already delivered, never the head: a commit still in the
+    // window must not make the client think it missed something.
     return { matchId: key, kind: 'CHECKPOINT', version: entry.delivered, from: null, patch: null, committedAt: null };
   }
 
@@ -58,8 +58,8 @@ export class ChannelHub {
     if (this.mode === 'state') {
       entry.unsentSince ??= change.committedAt;
       const wait = this.throttleMs - (this.now() - entry.lastEmit);
-      if (wait <= 0 && !entry.flushTimer) this.#flushState(change.key);                    // calmo: na hora
-      else entry.flushTimer ??= setTimeout(() => this.#flushState(change.key), Math.max(0, wait)); // rajada: fim da janela
+      if (wait <= 0 && !entry.flushTimer) this.#flushState(change.key);                    // quiet: right away
+      else entry.flushTimer ??= setTimeout(() => this.#flushState(change.key), Math.max(0, wait)); // burst: end of the window
       return;
     }
     if (entry.pending) {
@@ -76,7 +76,7 @@ export class ChannelHub {
     const entry = this.keys.get(key);
     if (!entry) return;
     clearTimeout(entry.flushTimer); entry.flushTimer = null;
-    // committedAt = o commit mais antigo ainda não enviado: mede o pior atraso do frame.
+    // committedAt = the oldest commit not yet sent: measures the frame's worst delay.
     const committedAt = entry.unsentSince; entry.unsentSince = null; entry.lastEmit = this.now();
     this.#emit(key, { matchId: key, kind: 'STATE', version: entry.latest.version, state: entry.latest.state, committedAt });
   }
@@ -84,10 +84,10 @@ export class ChannelHub {
   #flush(key) {
     const entry = this.keys.get(key);
     if (!entry?.pending) return;
-    // committedAt = o commit mais antigo da janela: a latência medida é a do pior dado do frame.
+    // committedAt = the oldest commit in the window: the measured latency is that of the frame's oldest data.
     const { from, version, patch, committedAt } = entry.pending;
     entry.pending = null; entry.flushTimer = null; entry.delivered = version;
-    // No flush o estado mais recente está exatamente em `version`.
+    // On flush the latest state is exactly at `version`.
     if (this.adaptive && JSON.stringify(entry.latest.state).length < JSON.stringify(patch).length) {
       this.#emit(key, { matchId: key, kind: 'STATE', from: null, version, state: entry.latest.state, patch: null, committedAt });
     } else this.#emit(key, { matchId: key, kind: 'DELTA', from, version, patch, committedAt });
@@ -103,11 +103,11 @@ export class ChannelHub {
   get size() { let n = 0; for (const entry of this.keys.values()) n += entry.listeners.size; return n; }
 }
 
-// Fila de um assinante com fusão sem perda, o que limita a memória sem desconectar:
-//   STATE novo descarta tudo o que está na fila (estado inteiro supera tudo);
-//   DELTA seguido de DELTA vira um DELTA (patches por valor final se fundem);
-//   CHECKPOINT com algo na fila é descartado (a fila já traz informação mais nova).
-// Iterator manual para que return() libere o listener na hora.
+// A subscriber's queue with lossless merging, which bounds memory without disconnecting:
+//   a new STATE drops everything in the queue (the full state supersedes it all);
+//   DELTA followed by DELTA becomes one DELTA (final-value patches merge);
+//   CHECKPOINT with something in the queue is dropped (the queue already has newer info).
+// Manual iterator so that return() releases the listener right away.
 export class LiveStream {
   constructor({ hub, key, onClose = () => {}, onMerge = () => {} }) {
     this.onClose = onClose; this.onMerge = onMerge; this.done = false; this.wake = null;
@@ -123,7 +123,8 @@ export class LiveStream {
       this.queue[this.queue.length - 1] = { ...last, version: frame.version, patch: mergePatches(last.patch, frame.patch) };
       this.onMerge();
     } else if (frame.kind === 'CHECKPOINT' && this.queue.length) {
-      // descartado
+      // dropped
+
     } else this.queue.push(frame);
   }
   async next() {

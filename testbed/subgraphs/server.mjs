@@ -10,9 +10,10 @@ const app = await startSubgraphs({
   scoreboard: { periodicMs: Number(process.env.SCOREBOARD_PERIODIC_MS ?? 1000) },
   stats: { periodicMs: Number(process.env.STATS_PERIODIC_MS ?? 1000), throttleMs: Number(process.env.STATS_THROTTLE_MS ?? 500) }
 });
-console.log(`scores  http/ws://localhost:${app.ports.scores}/graphql  (métricas em /metrics)`);
+console.log(`scores  http/ws://localhost:${app.ports.scores}/graphql  (metrics at /metrics)`);
 console.log(`catalog http://localhost:${app.ports.catalog}/graphql`);
 console.log(`stats   http/ws://localhost:${app.ports.stats}/graphql`);
 const stop = process.env.SIMULATE ? simulateMatch({ stores: app.stores, matchId: process.env.SIMULATE, eventsPerSecond: Number(process.env.EVENTS_PER_SECOND ?? 20) }) : () => {};
-if (process.env.SIMULATE) console.log(`simulando a partida ${process.env.SIMULATE}`);
+if (process.env.SIMULATE) console.log(`simulating match ${process.env.SIMULATE}`
+);
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { stop(); app.close().then(() => process.exit(0)); });

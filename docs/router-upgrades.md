@@ -1,120 +1,119 @@
-# O plugin e as versões do Apollo Router
+# The plugin and Apollo Router versions
 
-Pergunta: com que frequência uma versão nova do Router quebra o
-`subscription_snapshot`?
+Question: how often does a new Router version break `subscription_snapshot`?
 
-Método (out/2026):
-- **Comparação estática:** o código-fonte publicado de 20 versões (1.61.13 e o
-  último patch de cada minor de 2.0 a 2.18.0), conferindo cada ponto de que o
-  plugin depende.
-- **Teste prático:** o plugin, sem mudar nada, compilado contra a 2.18.0 e testado
-  (unidade, pipeline do Router e o Router licenciado em 3 instâncias).
+Method (Oct 2026):
+- **Static comparison:** the published source code of 20 versions (1.61.13 and
+  the latest patch of each minor from 2.0 to 2.18.0), checking every point the
+  plugin depends on.
+- **Hands-on test:** the plugin, unchanged, built against 2.18.0 and tested
+  (unit, Router pipeline and the licensed Router with 3 instances).
 
-## Ritmo de versões
+## Release cadence
 
-- Um minor novo a cada ~4 semanas: 2.10 (dez/2025) a 2.18 (set/2026), oito minors
-  em dez meses.
-- A 2.10 ainda recebe patches (2.10.5 em jul/2026). Este POC usou a 2.10.5 até
-  ser atualizado para a 2.18.0 (a estável mais recente em out/2026).
-- A versão mínima do Rust subiu 8 vezes entre 2.0 e 2.18 (a 2.18 exige 1.97.1).
+- A new minor every ~4 weeks: 2.10 (Dec 2025) to 2.18 (Sep 2026), eight minors
+  in ten months.
+- 2.10 still gets patches (2.10.5 in Jul 2026). This POC used 2.10.5 until it
+  was upgraded to 2.18.0 (the latest stable in Oct 2026).
+- The minimum Rust version went up 8 times between 2.0 and 2.18 (2.18 requires 1.97.1).
 
-## O que mudou, ponto a ponto
+## What changed, point by point
 
-| Ponto de que o plugin depende | Mudou em 2.x? | Efeito no plugin |
+| Point the plugin depends on | Changed in 2.x? | Effect on the plugin |
 | --- | --- | --- |
-| `trait Plugin`, `PluginInit`, `supergraph::Response::map`, `map_future_with_request_data` | não (iguais desde 1.61) | nenhum |
-| `graphql::Response` (`subscribed`, `extensions`, `data`, `errors`) | não | nenhum |
-| `register_plugin!` | 2.0 e 2.1 (por dentro) | nenhum no uso |
-| Execution service marca o 1º item (`first.subscribed`) | não | nenhum |
-| Router service consome o 1º item e abre o multipart só com o resto | código mexido em 2.2.1, 2.4.0 e 2.14.2; **a regra continua a mesma** | nenhum (conferido em 2.18) |
-| Chave `apollo::supergraph::operation_kind` no contexto | renomeada na 2.0 (na 1.x era `operation_kind`) | na 1.x o plugin não reconheceria subscriptions e deixaria de reter, **sem erro** |
-| Dependência `schemars` (o `JsonSchema` da config do plugin) | 0.8 → 1.0 na 2.7.0 | **não compila** até trocar a versão no `Cargo.toml` |
-| Versão mínima do Rust | 8 vezes | o build falha até atualizar o toolchain (aconteceu aqui: 1.97.0 → 1.97.1 para a 2.18) |
-| Multipart | grande na 2.6.2 e depois (métricas de motivo de fim) | nenhum |
+| `trait Plugin`, `PluginInit`, `supergraph::Response::map`, `map_future_with_request_data` | no (same since 1.61) | none |
+| `graphql::Response` (`subscribed`, `extensions`, `data`, `errors`) | no | none |
+| `register_plugin!` | 2.0 and 2.1 (internally) | none in usage |
+| Execution service marks the 1st item (`first.subscribed`) | no | none |
+| Router service consumes the 1st item and opens the multipart with the rest only | code touched in 2.2.1, 2.4.0 and 2.14.2; **the rule is still the same** | none (checked on 2.18) |
+| `apollo::supergraph::operation_kind` key in the context | renamed in 2.0 (it was `operation_kind` in 1.x) | on 1.x the plugin would not recognize subscriptions and would stop retaining, **with no error** |
+| `schemars` dependency (the plugin config's `JsonSchema`) | 0.8 → 1.0 in 2.7.0 | **does not compile** until the version in `Cargo.toml` is changed |
+| Minimum Rust version | 8 times | the build fails until the toolchain is updated (happened here: 1.97.0 → 1.97.1 for 2.18) |
+| Multipart | large in 2.6.2 and later (end-reason metrics) | none |
 
-**Fora do plugin, mas nos arquivos deste POC** (a config YAML do Router):
+**Outside the plugin, but in this POC's files** (the Router YAML config):
 
-| Versão | Mudança | Efeito |
+| Version | Change | Effect |
 | --- | --- | --- |
-| 2.3.0 | `subscription.enable_deduplication` → `subscription.deduplication.enabled` | config antiga inválida |
-| 2.15.0 | `deduplication.enabled` → `deduplication.all.enabled` | o Router **se recusa a iniciar** com a config antiga |
-| 2.18.0 | `headers.all.request` passa a exigir `operations:` | config antiga inválida |
+| 2.3.0 | `subscription.enable_deduplication` → `subscription.deduplication.enabled` | old config invalid |
+| 2.15.0 | `deduplication.enabled` → `deduplication.all.enabled` | the Router **refuses to start** with the old config |
+| 2.18.0 | `headers.all.request` now requires `operations:` | old config invalid |
 
-`router config upgrade` reescreve as três sozinho. Mas a config migrada para a
-2.18 é rejeitada pela 2.10.5, então **não existe uma config que sirva às duas
-versões**: ela tem de acompanhar o binário.
+`router config upgrade` rewrites all three by itself. But the config migrated to
+2.18 is rejected by 2.10.5, so **no single config works for both versions**: it
+has to follow the binary.
 
-## Resultado do teste prático na 2.18.0
+## Hands-on test results on 2.18.0
 
-- **Plugin:** compilou sem mudar nenhuma linha (só o Rust 1.97.1).
-- **Testes:** os 8 de unidade e os 4 no pipeline do Router passaram. Com retenção,
-  o cliente que entra depois recebe o estado em 1 ms; sem, em 2.799 ms, iguais à
-  2.10.5.
-- **Config:** `router config validate` reprovou as duas configs do POC (o
-  `headers`). Com `router config upgrade`, passaram.
-- **Router licenciado** (3 instâncias + 1 sem plugin, passthrough e callback):
-  - todos os itens do roteiro passaram, inclusive o ciclo de vida e a queda de
-    instância (143 ms);
-  - o upstream duplicado da deduplicação do Router apareceu de novo, desta vez
-    **também no modo callback**; continua não afetando a correção.
+- **Plugin:** compiled without changing a single line (only Rust 1.97.1).
+- **Tests:** the 8 unit tests and the 4 in the Router pipeline passed. With
+  retention, the late-joining client gets the state in 1 ms; without it, in
+  2,799 ms, same as 2.10.5.
+- **Config:** `router config validate` rejected both POC configs (the
+  `headers`). After `router config upgrade`, they passed.
+- **Licensed Router** (3 instances + 1 without the plugin, passthrough and callback):
+  - every item of the script passed, including the lifecycle and the instance
+    failure (143 ms);
+  - the duplicated upstream from the Router's deduplication showed up again, this
+    time **in callback mode as well**; it still does not affect correctness.
 
-## Conclusão
+## Conclusion
 
-- **O código do plugin raramente quebra.** A API de plugins e a forma do stream de
-  subscription ficaram estáveis em toda a linha 2.x. A única quebra de compilação
-  do próprio plugin foi a troca do `schemars` (2.7.0); o resto mudou só em versões
-  major (1.x → 2.0).
-- **O que quebra com frequência fica em volta dele:**
-  - a versão do Rust, várias vezes por ano;
-  - a config YAML do Router, 3 vezes desde a 2.3, duas delas impedindo o Router
-    de iniciar;
-  - dependências transitivas, raramente.
+- **The plugin code rarely breaks.** The plugin API and the shape of the
+  subscription stream stayed stable across the whole 2.x line. The only compile
+  break in the plugin itself was the `schemars` switch (2.7.0); the rest changed
+  only in major versions (1.x → 2.0).
+- **What breaks often is around it:**
+  - the Rust version, several times a year;
+  - the Router YAML config, 3 times since 2.3, twice preventing the Router from
+    starting;
+  - transitive dependencies, rarely.
 
-  Tudo isso é barulhento: falha no build ou na inicialização, e não em produção.
-- **O risco silencioso é o contrato interno do stream** (o marcador no 1º item e a
-  chave `operation_kind`). Ele não é documentado nem garantido pela Apollo. Se mudar,
-  o plugin pode deixar de reter, como aconteceria na 1.x, ou perder o frame, como no
-  teste com a ordem invertida, sem nenhum erro de compilação. Não mudou em 2.x, e
-  `npm run test:router-harness` existe para pegar isso.
+  All of this is loud: it fails at build or startup, not in production.
+- **The silent risk is the stream's internal contract** (the marker on the 1st
+  item and the `operation_kind` key). It is neither documented nor guaranteed by
+  Apollo. If it changes, the plugin may stop retaining, as would happen on 1.x, or
+  lose the frame, as in the test with the reversed order, with no compile error.
+  It did not change in 2.x, and `npm run test:router-harness` exists to catch it.
 
-## A atualização para a 2.18.0
+## The upgrade to 2.18.0
 
-Feita como descrito abaixo, com o resultado:
-- **Código do plugin:** nenhuma mudança.
-- **Dependência e toolchain:** `apollo-router = "=2.18.0"` e um `Cargo.lock` novo;
-  Rust fixado em 1.97.1 (`rust-toolchain.toml` e
-  `rust:1.97.1-bookworm` no Dockerfile).
-- **Configs:** `router.yaml`, `router-plugin.yaml` e `router-plugin-callback.yaml`
-  migradas à mão, para manter os comentários: `deduplication.all.enabled` e
-  `headers.all.request.operations`. Com isso, `router config upgrade` não tem mais
-  nada a migrar. A imagem oficial do perfil `apollo` também foi para a v2.18.0.
-- **Testes:** os mesmos de antes, todos passando (ver [validação](../testbed/docs/validation.md)).
+Done as described below, with this outcome:
+- **Plugin code:** no changes.
+- **Dependency and toolchain:** `apollo-router = "=2.18.0"` and a new `Cargo.lock`;
+  Rust pinned to 1.97.1 (`rust-toolchain.toml` and
+  `rust:1.97.1-bookworm` in the Dockerfile).
+- **Configs:** `router.yaml`, `router-plugin.yaml` and `router-plugin-callback.yaml`
+  migrated by hand, to keep the comments: `deduplication.all.enabled` and
+  `headers.all.request.operations`. With that, `router config upgrade` has nothing
+  left to migrate. The official image for the `apollo` profile also moved to v2.18.0.
+- **Tests:** the same as before, all passing (see [validation](../testbed/docs/validation.md)).
 
-## Como atualizar o Router
+## How to upgrade the Router
 
-1. **Trocar a versão:** `apollo-router = "=X.Y.Z"` no `Cargo.toml`.
-   Ver a versão mínima do Rust (`rust-version` do crate) e a do
+1. **Change the version:** `apollo-router = "=X.Y.Z"` in `Cargo.toml`.
+   Check the minimum Rust version (the crate's `rust-version`) and the one in the
    `Dockerfile`.
-2. **Compilar:** `cargo build --release`. Se quebrar, o mais provável é uma
-   dependência como o `schemars`; alinhar com a do Router.
-3. **Migrar a config:** `./target/release/router config upgrade examples/router/router-plugin.yaml`
-   (e a de callback), revisar o resultado e validar com `config validate`.
-4. **Testar no pipeline do Router:** `npm run test:router-harness` (em `testbed/`). É o que pega
-   mudança no contrato do stream.
-5. **Com a chave do GraphOS:** `npm run test:router-real` e
-   `MODE=callback npm run test:router-real` (em `testbed/`).
+2. **Build:** `cargo build --release`. If it breaks, the most likely cause is a
+   dependency such as `schemars`; align it with the Router's.
+3. **Migrate the config:** `./target/release/router config upgrade examples/router/router-plugin.yaml`
+   (and the callback one), review the result and validate it with `config validate`.
+4. **Test in the Router pipeline:** `npm run test:router-harness` (in `testbed/`). This
+   is what catches a change in the stream contract.
+5. **With the GraphOS key:** `npm run test:router-real` and
+   `MODE=callback npm run test:router-real` (in `testbed/`).
 
-Para testar uma versão nova sem mexer na pasta do plugin:
+To test a new version without touching the plugin directory:
 
 ```bash
-# ex.: da 2.18.0 para X.Y.Z, com o Rust mínimo dela (R); na raiz do repositório
-mkdir /tmp/plugin-novo && cp -r Cargo.toml Cargo.lock src tests /tmp/plugin-novo/
-sed -i 's/=2.18.0/=X.Y.Z/' /tmp/plugin-novo/Cargo.toml
-(cd testbed && PLUGIN_DIR=/tmp/plugin-novo CARGO_TOOLCHAIN=R npm run test:router-harness)
-(cd /tmp/plugin-novo && cargo +R build --release)
-mkdir -p /tmp/cfg && /tmp/plugin-novo/target/release/router config upgrade examples/router/router-plugin.yaml > /tmp/cfg/router-plugin.yaml   # idem callback
-(cd testbed && ROUTER_BIN=/tmp/plugin-novo/target/release/router ROUTER_CONFIG_DIR=/tmp/cfg npm run test:router-real)
+# e.g. from 2.18.0 to X.Y.Z, with its minimum Rust (R); from the repository root
+mkdir /tmp/plugin-new && cp -r Cargo.toml Cargo.lock src tests /tmp/plugin-new/
+sed -i 's/=2.18.0/=X.Y.Z/' /tmp/plugin-new/Cargo.toml
+(cd testbed && PLUGIN_DIR=/tmp/plugin-new CARGO_TOOLCHAIN=R npm run test:router-harness)
+(cd /tmp/plugin-new && cargo +R build --release)
+mkdir -p /tmp/cfg && /tmp/plugin-new/target/release/router config upgrade examples/router/router-plugin.yaml > /tmp/cfg/router-plugin.yaml   # same for callback
+(cd testbed && ROUTER_BIN=/tmp/plugin-new/target/release/router ROUTER_CONFIG_DIR=/tmp/cfg npm run test:router-real)
 ```
 
-Atenção: `config upgrade` escreve os avisos no mesmo stdout do YAML; remova as
-linhas que começam com `{"timestamp"` antes de usar.
+Note: `config upgrade` writes its warnings to the same stdout as the YAML; remove
+the lines starting with `{"timestamp"` before using it.

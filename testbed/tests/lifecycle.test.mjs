@@ -11,36 +11,36 @@ async function until(predicate, message, ms = 8000) {
   throw new Error(`Timeout: ${message}`);
 }
 
-// ---- Regras com relógio fixo ---------------------------------------------------
+// ---- Rules with a fixed clock ----------------------------------------------------
 const T = Date.parse('2026-10-18T19:00:00Z');   // kickoff
 const MIN = 60_000, LEAD = 15 * MIN;
 
-test('fase: o horário decide quando assinar, o status decide quando parar', () => {
+test('phase: the time decides when to subscribe, the status decides when to stop', () => {
   assert.deepEqual(matchPhase({ status: 'SCHEDULED', kickoff: T }, T - 2 * 60 * MIN), { phase: 'before', subscribeAt: T - LEAD });
-  assert.deepEqual(matchPhase({ status: 'SCHEDULED', kickoff: T }, T - LEAD), { phase: 'live' }, 'na hora da janela');
-  assert.deepEqual(matchPhase({ status: 'SCHEDULED', kickoff: T }, T + 20 * MIN), { phase: 'live' }, 'atrasado: continua assinando');
-  assert.deepEqual(matchPhase({ status: 'SCHEDULED', kickoff: null }, T), { phase: 'live' }, 'sem horário: assina, por segurança');
-  assert.deepEqual(matchPhase({ status: 'LIVE', kickoff: T }, T - 2 * 60 * MIN), { phase: 'live' }, 'começou antes: o status manda');
+  assert.deepEqual(matchPhase({ status: 'SCHEDULED', kickoff: T }, T - LEAD), { phase: 'live' }, 'right at the window');
+  assert.deepEqual(matchPhase({ status: 'SCHEDULED', kickoff: T }, T + 20 * MIN), { phase: 'live' }, 'late: keeps subscribing');
+  assert.deepEqual(matchPhase({ status: 'SCHEDULED', kickoff: null }, T), { phase: 'live' }, 'no kickoff time: subscribes, to be safe');
+  assert.deepEqual(matchPhase({ status: 'LIVE', kickoff: T }, T - 2 * 60 * MIN), { phase: 'live' }, 'started early: the status wins');
   assert.deepEqual(matchPhase({ status: 'HALF_TIME', kickoff: T }, T + 50 * MIN), { phase: 'live' });
   assert.deepEqual(matchPhase({ status: 'FULL_TIME', kickoff: T }, T + 2 * 60 * MIN), { phase: 'over' });
 });
 
-test('cache do placar: SCHEDULED nunca passa de kickoff − lead; FULL_TIME é longo', () => {
+test('scoreboard cache: SCHEDULED never goes past kickoff − lead; FULL_TIME is long', () => {
   const ttl = (state, now) => scoreboardMaxAge(state, now, { live: 2 });
   const scheduled = { status: 'SCHEDULED', kickoff: T };
-  assert.equal(ttl(scheduled, T - 3 * 60 * MIN), 300, 'longe do início: o teto de 5 min');
-  assert.equal(ttl(scheduled, T - LEAD - 90_000), 90, 'perto: só até a janela');
-  assert.equal(ttl(scheduled, T - LEAD - 400), 0, 'menos de 1 s: no-store');
-  assert.equal(ttl(scheduled, T - LEAD + 1), 2, 'na janela: curto, como ao vivo');
+  assert.equal(ttl(scheduled, T - 3 * 60 * MIN), 300, 'far from kickoff: the 5 min cap');
+  assert.equal(ttl(scheduled, T - LEAD - 90_000), 90, 'close: only until the window');
+  assert.equal(ttl(scheduled, T - LEAD - 400), 0, 'less than 1 s: no-store');
+  assert.equal(ttl(scheduled, T - LEAD + 1), 2, 'in the window: short, like live');
   assert.equal(ttl({ status: 'SCHEDULED', kickoff: null }, T), 2);
   assert.equal(ttl({ status: 'LIVE', kickoff: T }, T + MIN), 2);
   assert.equal(ttl({ status: 'FULL_TIME', kickoff: T }, T + 2 * 60 * MIN), 3600);
-  // Propriedade: para qualquer instante antes da janela, a resposta expira até a janela.
-  for (let now = T - 3 * 60 * MIN; now < T - LEAD; now += 7_777) assert.ok(now + ttl(scheduled, now) * 1000 <= T - LEAD, `expira depois da janela em ${now}`);
+  // Property: for any instant before the window, the response expires by the window.
+  for (let now = T - 3 * 60 * MIN; now < T - LEAD; now += 7_777) assert.ok(now + ttl(scheduled, now) * 1000 <= T - LEAD, `expires after the window at ${now}`);
 });
 
-// ---- Ponta a ponta pelo edge (cache de queries no pior caso: nunca expira) ------
-// Janela curta (lead de 1 s) para o teste não esperar 15 min.
+// ---- End to end through the edge (worst-case query cache: never expires) ---------
+// Short window (1 s lead) so the test does not wait 15 min.
 const lead = 1000;
 let stack;
 test.before(async () => { stack = await startStack({ liveLeadMs: lead, scoreboard: { periodicMs: 500 }, stats: { periodicMs: 500, throttleMs: 100 } }); });
@@ -64,77 +64,77 @@ function watch(matchId) {
 const cacheControl = async m => (await fetch(scoresUrl(), { method: 'POST', headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ query: 'query($m: ID!) { scoreboard(matchId: $m) { version } }', variables: { m } }) })).headers.get('cache-control');
 
-test('Cache-Control do subgraph conforme status e horário', { timeout: 30_000 }, async () => {
-  await schedule('cc-longe', Date.now() + 3 * 60 * MIN);
-  assert.equal(await cacheControl('cc-longe'), 'public, max-age=300');
-  await schedule('cc-perto', Date.now() + lead + 30_000);
-  const near = Number(/max-age=(\d+)/.exec(await cacheControl('cc-perto'))[1]);
-  assert.ok(near <= 30 && near >= 28, `perto do início: ${near} s`);
-  await schedule('cc-janela', Date.now() + lead / 2);
-  assert.equal(await cacheControl('cc-janela'), 'public, max-age=2');
-  await start('cc-fim'); await finish('cc-fim');
-  assert.equal(await cacheControl('cc-fim'), 'public, max-age=3600');
+test("the subgraph's Cache-Control by status and time", { timeout: 30_000 }, async () => {
+  await schedule('cc-far', Date.now() + 3 * 60 * MIN);
+  assert.equal(await cacheControl('cc-far'), 'public, max-age=300');
+  await schedule('cc-near', Date.now() + lead + 30_000);
+  const near = Number(/max-age=(\d+)/.exec(await cacheControl('cc-near'))[1]);
+  assert.ok(near <= 30 && near >= 28, `close to kickoff: ${near} s`);
+  await schedule('cc-window', Date.now() + lead / 2);
+  assert.equal(await cacheControl('cc-window'), 'public, max-age=2');
+  await start('cc-end'); await finish('cc-end');
+  assert.equal(await cacheControl('cc-end'), 'public, max-age=3600');
 });
 
-test('partida encerrada: só a query, nenhuma subscription', { timeout: 30_000 }, async () => {
-  const m = `encerrada-${Date.now()}`;
+test('finished match: query only, no subscription', { timeout: 30_000 }, async () => {
+  const m = `ended-${Date.now()}`;
   await start(m); await goal(m); await finish(m);
   const opened = { scoreboard: stack.subgraphs.metrics.scoreboard.streamsOpened, stats: stack.subgraphs.metrics.stats.streamsOpened };
   const w = watch(m);
   await w.done;
   assert.deepEqual(w.phases, ['over']);
   assert.equal(w.counts.subscriptions, 0);
-  assert.equal(w.counts.queries, 2, 'uma query por canal');
+  assert.equal(w.counts.queries, 2, 'one query per channel');
   assert.equal(w.syncs.scoreboard.state.status, 'FULL_TIME');
   assert.equal(w.syncs.scoreboard.state.home, 1);
-  assert.deepEqual({ scoreboard: stack.subgraphs.metrics.scoreboard.streamsOpened, stats: stack.subgraphs.metrics.stats.streamsOpened }, opened, 'nenhum stream aberto no subgraph');
+  assert.deepEqual({ scoreboard: stack.subgraphs.metrics.scoreboard.streamsOpened, stats: stack.subgraphs.metrics.stats.streamsOpened }, opened, 'no stream opened on the subgraph');
 });
 
-test('antes do início com SCHEDULED antigo no cache: assina na hora da janela; atraso coberto; até o FULL_TIME', { timeout: 30_000 }, async () => {
-  const m = `agendada-${Date.now()}`;
+test('before kickoff with a stale SCHEDULED in the cache: subscribes at the window; delay covered; until FULL_TIME', { timeout: 30_000 }, async () => {
+  const m = `scheduled-${Date.now()}`;
   const kickoff = Date.now() + lead + 700;
   await schedule(m, kickoff);
-  // Aquece o cache do edge com SCHEDULED; ele nunca expira (pior caso).
+  // Warms the edge cache with SCHEDULED; it never expires (worst case).
   await snapshotApi(stack.edge.url, 'scoreboard', m).snapshot(0);
   const w = watch(m);
   try {
-    await until(() => w.phase === 'before', 'fase before');
+    await until(() => w.phase === 'before', 'before phase');
     assert.equal(w.counts.subscriptions, 0);
-    assert.equal(streams('scoreboard', m), 0, 'antes da janela, nenhum stream');
+    assert.equal(streams('scoreboard', m), 0, 'before the window, no stream');
 
-    // Na janela (kickoff − lead), assina mesmo com o cache dizendo SCHEDULED.
-    await until(() => w.phase === 'live' && w.syncs.scoreboard.synced && w.syncs.stats.synced, 'assinou na janela', 5000);
+    // In the window (kickoff − lead), subscribes even with the cache saying SCHEDULED.
+    await until(() => w.phase === 'live' && w.syncs.scoreboard.synced && w.syncs.stats.synced, 'subscribed in the window', 5000);
     const subscribedAt = Date.now();
-    assert.ok(subscribedAt >= kickoff - lead, 'não assinou antes da janela');
-    assert.ok(subscribedAt - (kickoff - lead) < 500, `assinou ${subscribedAt - (kickoff - lead)} ms depois da janela`);
+    assert.ok(subscribedAt >= kickoff - lead, 'did not subscribe before the window');
+    assert.ok(subscribedAt - (kickoff - lead) < 500, `subscribed ${subscribedAt - (kickoff - lead)} ms after the window`);
     assert.equal(streams('scoreboard', m), 1); assert.equal(streams('stats', m), 1);
     const cached = await snapshotApi(stack.edge.url, 'scoreboard', m).snapshot(0);
-    assert.equal(cached.state.status, 'SCHEDULED', 'o cache continua antigo, e não importa');
+    assert.equal(cached.state.status, 'SCHEDULED', 'the cache is still stale, and it does not matter');
 
-    // Atraso: passou do horário e ainda não começou; o cliente segue assinando.
-    await until(() => Date.now() > kickoff + 600, 'passar do horário', 3000);
+    // Delay: past kickoff time and not started yet; the client keeps subscribing.
+    await until(() => Date.now() > kickoff + 600, 'past kickoff time', 3000);
     assert.equal(w.syncs.scoreboard.state.status, 'SCHEDULED');
     assert.equal(w.phase, 'live');
     await start(m);
-    await until(() => w.syncs.scoreboard.state.status === 'LIVE', 'apito inicial pelo stream');
+    await until(() => w.syncs.scoreboard.state.status === 'LIVE', 'kickoff through the stream');
     await goal(m);
-    await until(() => w.syncs.scoreboard.state.home === 1, 'gol');
+    await until(() => w.syncs.scoreboard.state.home === 1, 'goal');
 
-    // FULL_TIME: o placar termina no subgraph, o cliente fecha os dois canais.
+    // FULL_TIME: the scoreboard ends on the subgraph, the client closes both channels.
     await finish(m);
     await w.done;
     assert.equal(w.phase, 'over');
     assert.deepEqual(w.phases, ['before', 'live', 'over']);
     assert.equal(w.syncs.scoreboard.state.status, 'FULL_TIME');
-    await until(() => streams('scoreboard', m) === 0 && streams('stats', m) === 0, 'streams fechados no subgraph');
-    assert.equal(w.errors.length, 0, 'sem reconexão');
+    await until(() => streams('scoreboard', m) === 0 && streams('stats', m) === 0, 'streams closed on the subgraph');
+    assert.equal(w.errors.length, 0, 'no reconnect');
   } finally { await w.close(); }
 });
 
-test('cache antigo dizendo LIVE numa partida já encerrada: o primeiro frame traz FULL_TIME e fecha', { timeout: 30_000 }, async () => {
-  const m = `live-antigo-${Date.now()}`;
+test('stale cache saying LIVE for an already finished match: the first frame brings FULL_TIME and closes', { timeout: 30_000 }, async () => {
+  const m = `stale-live-${Date.now()}`;
   await start(m);
-  await snapshotApi(stack.edge.url, 'scoreboard', m).snapshot(0);   // cache: LIVE, para sempre
+  await snapshotApi(stack.edge.url, 'scoreboard', m).snapshot(0);   // cache: LIVE, forever
   await goal(m); await finish(m);
   const t0 = Date.now();
   const w = watch(m);
@@ -142,21 +142,22 @@ test('cache antigo dizendo LIVE numa partida já encerrada: o primeiro frame tra
   assert.deepEqual(w.phases, ['live', 'over']);
   assert.equal(w.syncs.scoreboard.state.status, 'FULL_TIME');
   assert.equal(w.syncs.scoreboard.state.home, 1);
-  assert.ok(Date.now() - t0 < 1000, `fechou em ${Date.now() - t0} ms`);
-  assert.equal(w.errors.length, 0, 'sem reconexão');
-  await until(() => streams('scoreboard', m) === 0 && streams('stats', m) === 0 && stack.edge.metrics.upstreamSubscriptions === 0, 'tudo fechado');
+  assert.ok(Date.now() - t0 < 1000, `closed in ${Date.now() - t0} ms`);
+  assert.equal(w.errors.length, 0, 'no reconnect');
+  await until(() => streams('scoreboard', m) === 0 && streams('stats', m) === 0 && stack.edge.metrics.upstreamSubscriptions === 0, 'everything closed');
 });
 
-test('vários clientes deduplicados: o FULL_TIME encerra todos e libera o upstream', { timeout: 30_000 }, async () => {
-  const m = `dedup-fim-${Date.now()}`;
+test('several deduplicated clients: FULL_TIME ends all of them and releases the upstream', { timeout: 30_000 }, async () => {
+  const m = `dedup-end-${Date.now()}`;
   await start(m);
   const ws = Array.from({ length: 5 }, () => watch(m));
   try {
-    await until(() => ws.every(w => w.syncs.scoreboard.synced && w.syncs.stats.synced), 'todos assinando');
-    assert.equal(streams('scoreboard', m), 1, 'um upstream para os 5');
+    await until(() => ws.every(w => w.syncs.scoreboard.synced && w.syncs.stats.synced), 'everyone subscribed');
+    assert.equal(streams('scoreboard', m), 1, 'one upstream for the 5');
     await finish(m);
     await Promise.all(ws.map(w => w.done));
     assert.ok(ws.every(w => w.phase === 'over' && w.errors.length === 0));
-    await until(() => streams('scoreboard', m) === 0 && streams('stats', m) === 0, 'upstreams fechados');
+    await until(() => streams('scoreboard', m) === 0 && streams('stats', m) === 0, 'upstreams closed'
+);
   } finally { await Promise.all(ws.map(w => w.close())); }
 });

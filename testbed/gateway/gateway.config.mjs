@@ -1,11 +1,12 @@
 import { defineConfig } from '@graphql-hive/gateway';
 
-// O gateway fala graphql-ws com os subgraphs que têm subscription (placar e
-// estatísticas) e expõe aos clientes graphql-ws e SSE no mesmo /graphql.
+// The gateway speaks graphql-ws with the subgraphs that have subscriptions
+// (scoreboard and stats) and exposes graphql-ws and SSE to clients on the same /graphql.
 const ws = { options: { subscriptions: { kind: 'ws', location: '/graphql' } } };
 export const gatewayConfig = defineConfig({
   supergraph: process.env.SUPERGRAPH_PATH ?? './gateway/supergraph.graphql',
   transportEntries: { scores: ws, stats: ws },
-  // Erros de domínio (BAD_USER_INPUT, NOT_YET) precisam chegar ao cliente.
+  // Domain errors (BAD_USER_INPUT, NOT_YET) must reach the client.
+
   maskedErrors: false
 });

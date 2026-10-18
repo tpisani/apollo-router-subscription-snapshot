@@ -4,12 +4,12 @@ import { snapshotApi, transports } from '../client/transport.mjs';
 import { scoreboardOps, applyStatEvents, playGenerator } from '../subgraphs/sports.mjs';
 import { startStack } from '../emulator/stack.mjs';
 
-// Partida simulada com clientes reais pelo edge (dedup + retenção + cache, multipart como o Router);
-// EDGES=3 coloca 3 instâncias atrás de um balanceador round-robin:
-//   SCORE_ONLY clientes de lista de jogos (só placar)
-//   FULL       clientes da tela da partida (placar + estatísticas)
-// Lances a EVENTS_PER_SECOND, com uma rajada de STORM_RATE lances/s no meio, e gols.
-// Subgraphs e clientes no mesmo processo: números para comparar, não capacidade.
+// Simulated match with real clients through the edge (dedup + retention + cache, multipart like the Router);
+// EDGES=3 puts 3 instances behind a round-robin balancer:
+//   SCORE_ONLY match list clients (scoreboard only)
+//   FULL       match screen clients (scoreboard + stats)
+// Plays at EVENTS_PER_SECOND, with a burst of STORM_RATE plays/s in the middle, and goals.
+// Subgraphs and clients in the same process: numbers for comparison, not capacity.
 const scoreOnly = Number(process.env.SCORE_ONLY ?? 100);
 const full = Number(process.env.FULL ?? 50);
 const seconds = Number(process.env.SECONDS ?? 10);
@@ -22,10 +22,10 @@ const matchId = `bench-${Date.now()}`;
 const next = playGenerator(matchId, 3);
 const { stores } = stack.subgraphs;
 stores.scoreboard.update(matchId, s => scoreboardOps.startPeriod(s, { period: 1 }, Date.now()));
-for (let i = 0; i < 400; i++) stores.stats.update(matchId, s => applyStatEvents(s, [next()], matchId)); // jogo já em andamento
+for (let i = 0; i < 400; i++) stores.stats.update(matchId, s => applyStatEvents(s, [next()], matchId)); // match already in progress
 
 const latency = { scoreboard: [], stats: [] };
-const bootstrap = []; // ms da abertura de cada subscription até o primeiro estado confirmado
+const bootstrap = []; // ms from opening each subscription to the first confirmed state
 const controller = new AbortController();
 const clients = [];
 const connect = (kind, channels) => {
@@ -45,8 +45,8 @@ const connect = (kind, channels) => {
   }
   clients.push(client);
 };
-for (let i = 0; i < scoreOnly; i++) connect('só placar', ['scoreboard']);
-for (let i = 0; i < full; i++) connect('placar + estatísticas', ['scoreboard', 'stats']);
+for (let i = 0; i < scoreOnly; i++) connect('scoreboard only', ['scoreboard']);
+for (let i = 0; i < full; i++) connect('scoreboard + stats', ['scoreboard', 'stats']);
 while (clients.some(c => Object.values(c.syncs).some(s => !s.synced))) await delay(20);
 latency.scoreboard.length = 0; latency.stats.length = 0;
 for (const c of clients) c.bytes = { scoreboard: 0, stats: 0 };
@@ -75,21 +75,22 @@ const perClient = kind => {
   const group = clients.filter(c => c.kind === kind);
   if (!group.length) return undefined;
   const avg = channel => Math.round(group.reduce((n, c) => n + c.bytes[channel], 0) / group.length / elapsed);
-  return { clientes: group.length, bytesPorSegundo: { placar: avg('scoreboard'), estatisticas: avg('stats') } };
+  return { clients: group.length, bytesPerSecond: { scoreboard: avg('scoreboard'), stats: avg('stats') } };
 };
 console.log(JSON.stringify({
-  duracaoS: +elapsed.toFixed(1), lances: plays, gols: goals, convergiram: `${converged}/${clients.length}`,
-  latenciaMs: {
-    placar: { p50: pct(latency.scoreboard, 0.5), p99: pct(latency.scoreboard, 0.99), max: pct(latency.scoreboard, 1), n: latency.scoreboard.length },
-    estatisticas: { p50: pct(latency.stats, 0.5), p99: pct(latency.stats, 0.99), max: pct(latency.stats, 1), n: latency.stats.length },
-    entradaAteSincronizar: { p50: pct(bootstrap, 0.5), max: pct(bootstrap, 1) }
+  durationS: +elapsed.toFixed(1), plays, goals, converged: `${converged}/${clients.length}`,
+  latencyMs: {
+    scoreboard: { p50: pct(latency.scoreboard, 0.5), p99: pct(latency.scoreboard, 0.99), max: pct(latency.scoreboard, 1), n: latency.scoreboard.length },
+    stats: { p50: pct(latency.stats, 0.5), p99: pct(latency.stats, 0.99), max: pct(latency.stats, 1), n: latency.stats.length },
+    joinToSynced: { p50: pct(bootstrap, 0.5), max: pct(bootstrap, 1) }
   },
-  porCliente: { 'só placar': perClient('só placar'), 'placar + estatísticas': perClient('placar + estatísticas') },
+  perClient: { 'scoreboard only': perClient('scoreboard only'), 'scoreboard + stats': perClient('scoreboard + stats') },
   subgraphs: {
-    streamsAbertos: { placar: after.scoreboard.streamsOpened, estatisticas: after.stats.streamsOpened },
-    framesEmitidos: { placar: after.scoreboard.framesEmitted - queriesBefore.scoreboard.framesEmitted, estatisticas: after.stats.framesEmitted - queriesBefore.stats.framesEmitted },
-    snapshotsNoBootstrap: { placar: queriesBefore.scoreboard.snapshotRequests, estatisticas: queriesBefore.stats.snapshotRequests },
-    snapshotsDuranteAoVivo: { placar: after.scoreboard.snapshotRequests - queriesBefore.scoreboard.snapshotRequests, estatisticas: after.stats.snapshotRequests - queriesBefore.stats.snapshotRequests }
+    streamsOpened: { scoreboard: after.scoreboard.streamsOpened, stats: after.stats.streamsOpened },
+    framesEmitted: { scoreboard: after.scoreboard.framesEmitted - queriesBefore.scoreboard.framesEmitted, stats: after.stats.framesEmitted - queriesBefore.stats.framesEmitted },
+    snapshotsAtBootstrap: { scoreboard: queriesBefore.scoreboard.snapshotRequests, stats: queriesBefore.stats.snapshotRequests },
+    snapshotsWhileLive: { scoreboard: after.scoreboard.snapshotRequests - queriesBefore.scoreboard.snapshotRequests, stats: after.stats.snapshotRequests - queriesBefore.stats.snapshotRequests }
   },
-  instancias: edgeMetrics.map(e => ({ upstreams: e.upstreamByOperation, entradasComFrameRetido: e.retainedReplays, cacheHits: e.cacheHits }))
+  instances: edgeMetrics.map(e => ({ upstreams: e.upstreamByOperation, joinsWithRetainedFrame: e.retainedReplays, cacheHits: e.cacheHits }))
+
 }, null, 2));

@@ -1,17 +1,17 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Ciclo de vida da partida</title>
+<title>Match lifecycle</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
-/* Layout: mesma família das outras páginas de cenários (guia de protocolo ao vivo).
-   Uma linha do tempo da partida no topo; um simulador que aplica as mesmas regras do
-   código; o gráfico do TTL perto do início; riscos do cache; cenários testados. */
+/* Layout: same family as the other scenario pages (live protocol guide).
+   A match timeline at the top; a simulator applying the same rules as the
+   code; the TTL chart near kickoff; cache risks; tested scenarios. */
 :root {
   --bg: #f3f6f4; --surface: #ffffff; --ink: #16211c; --muted: #53635b; --line: #d2dcd6; --soft: #e8eeea;
   --score: #1f50b8; --score-bg: #e5ecfa;
@@ -49,14 +49,14 @@ section { display: grid; gap: 14px; min-width: 0; }
 .lede { color: var(--muted); font-size: 16px; }
 header.top { display: grid; gap: 10px; }
 
-/* As três regras */
+/* The three rules */
 .rules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .rule { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 4px; }
 .rule b { font: 600 17px var(--f-display); }
 .rule span { color: var(--muted); font-size: 14px; }
 @media (max-width: 760px) { .rules { grid-template-columns: 1fr; } }
 
-/* Linha do tempo */
+/* Timeline */
 .timeline { display: grid; grid-template-columns: 2.2fr 1fr 2.2fr 1.6fr; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
 .seg { padding: 12px 14px; display: grid; gap: 4px; align-content: start; border-right: 1px solid var(--line); min-width: 0; }
 .seg:last-child { border-right: 0; }
@@ -68,7 +68,7 @@ header.top { display: grid; gap: 10px; }
 .seg.f { background: var(--db-bg); } .seg.f .what { color: var(--db); }
 @media (max-width: 760px) { .timeline { grid-template-columns: 1fr; } .seg { border-right: 0; border-bottom: 1px solid var(--line); } .seg:last-child { border-bottom: 0; } }
 
-/* Simulador */
+/* Simulator */
 .sim { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: grid; gap: 18px; }
 .controls { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
 @media (max-width: 760px) { .controls { grid-template-columns: 1fr; } }
@@ -101,7 +101,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--score); out
 .note.warn { background: var(--warn-bg); color: var(--ink); border: 1px solid var(--warn); }
 .note.ok { background: var(--db-bg); }
 
-/* Gráfico */
+/* Chart */
 .chart-box { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 14px 8px; position: relative; overflow-x: auto; }
 .chart-box svg { display: block; width: 100%; min-width: 520px; height: auto; }
 .chart-box text { font: 11px var(--f-mono); fill: var(--muted); }
@@ -116,7 +116,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--score); out
 .tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--bg); font: 12px var(--f-mono); padding: 5px 8px; border-radius: 5px; white-space: nowrap; transform: translate(-50%, -120%); }
 .caption { color: var(--muted); font-size: 13px; }
 
-/* Tabelas e cartões */
+/* Tables and cards */
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 14px; }
 th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -143,61 +143,61 @@ ul.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; max-width: 7
 <div class="wrap">
 
 <header class="top">
-  <h3>Placar e estatísticas ao vivo · ciclo de vida</h3>
-  <h1>Ciclo de vida da partida</h1>
-  <p class="lede">Quando a tela de uma partida usa só a query, quando abre a subscription e quando para. E por que um status antigo no cache não faz ninguém perder o início do jogo.</p>
+  <h3>Live scoreboard and stats · lifecycle</h3>
+  <h1>Match lifecycle</h1>
+  <p class="lede">When a match screen uses the query only, when it opens the subscription and when it stops. And why a stale status in the cache never makes anyone miss kickoff.</p>
 </header>
 
-<section aria-labelledby="regras">
-  <h2 id="regras">Três regras</h2>
+<section aria-labelledby="rules">
+  <h2 id="rules">Three rules</h2>
   <div class="rules">
-    <div class="rule"><b>O horário decide quando começar</b><span>A partir de <code>kickoff − 15 min</code> o cliente assina, seja qual for o status que a query devolveu.</span></div>
-    <div class="rule"><b>O status decide quando parar</b><span>No frame <code>FULL_TIME</code> o subgraph encerra o stream e o cliente fecha os dois canais.</span></div>
-    <div class="rule"><b>O cache não passa da janela</b><span>A resposta com <code>SCHEDULED</code> expira até <code>kickoff − 15 min</code>; nenhum cache serve “não começou” depois disso.</span></div>
+    <div class="rule"><b>The time decides when to start</b><span>From <code>kickoff − 15 min</code> the client subscribes, whatever status the query returned.</span></div>
+    <div class="rule"><b>The status decides when to stop</b><span>On the <code>FULL_TIME</code> frame the subgraph ends the stream and the client closes both channels.</span></div>
+    <div class="rule"><b>The cache never goes past the window</b><span>A response with <code>SCHEDULED</code> expires by <code>kickoff − 15 min</code>; no cache serves “not started” after that.</span></div>
   </div>
 </section>
 
-<section aria-labelledby="linha">
-  <h2 id="linha">A partida no tempo</h2>
+<section aria-labelledby="timeline">
+  <h2 id="timeline">The match over time</h2>
   <div class="timeline" role="list">
-    <div class="seg q" role="listitem"><span class="when">até kickoff − 15 min</span><span class="what">Só a query</span><span class="how">Status <code>SCHEDULED</code>. Cache de até 5 min, encurtando perto da janela.</span></div>
-    <div class="seg s" role="listitem"><span class="when">kickoff − 15 min → apito</span><span class="what">Subscription</span><span class="how">Escalação, aquecimento, atraso. Frames de <code>SCHEDULED</code>.</span></div>
-    <div class="seg s" role="listitem"><span class="when">apito → fim</span><span class="what">Subscription</span><span class="how"><code>LIVE</code> e <code>HALF_TIME</code>. Cache de 2 s na query.</span></div>
-    <div class="seg f" role="listitem"><span class="when">depois do FULL_TIME</span><span class="what">Só a query</span><span class="how">Estado final. Stream encerrado. Cache de 1 h.</span></div>
+    <div class="seg q" role="listitem"><span class="when">until kickoff − 15 min</span><span class="what">Query only</span><span class="how">Status <code>SCHEDULED</code>. Cache of up to 5 min, shrinking close to the window.</span></div>
+    <div class="seg s" role="listitem"><span class="when">kickoff − 15 min → whistle</span><span class="what">Subscription</span><span class="how">Line-ups, warm-up, delay. <code>SCHEDULED</code> frames.</span></div>
+    <div class="seg s" role="listitem"><span class="when">whistle → end</span><span class="what">Subscription</span><span class="how"><code>LIVE</code> and <code>HALF_TIME</code>. 2 s cache on the query.</span></div>
+    <div class="seg f" role="listitem"><span class="when">after FULL_TIME</span><span class="what">Query only</span><span class="how">Final state. Stream ended. 1 h cache.</span></div>
   </div>
 </section>
 
-<section aria-labelledby="simulador">
-  <h2 id="simulador">Simulador</h2>
-  <p>Escolha o instante e os dois status: o que está no banco e o que a query do cliente devolveu (que pode vir antiga do cache). As regras são as mesmas de <code>subgraphs/sports.mjs</code>, com a janela de 15 min.</p>
+<section aria-labelledby="simulator">
+  <h2 id="simulator">Simulator</h2>
+  <p>Pick the instant and both statuses: the one in the database and the one the client's query returned (which may be stale, from the cache). The rules are the same as in <code>subgraphs/sports.mjs</code>, with the 15 min window.</p>
   <div class="sim">
-    <div class="presets"><span class="label">Cenários</span>
-      <button type="button" data-preset="longe">Longe do início</button>
-      <button type="button" data-preset="perto">Perto da janela</button>
-      <button type="button" data-preset="janela">Cache antigo na janela</button>
-      <button type="button" data-preset="atraso">Jogo atrasado</button>
-      <button type="button" data-preset="aovivo">Ao vivo</button>
-      <button type="button" data-preset="liveantigo">Cache antigo de LIVE</button>
-      <button type="button" data-preset="fim">Encerrada</button>
+    <div class="presets"><span class="label">Scenarios</span>
+      <button type="button" data-preset="far">Far from kickoff</button>
+      <button type="button" data-preset="near">Close to the window</button>
+      <button type="button" data-preset="window">Stale cache in the window</button>
+      <button type="button" data-preset="delayed">Delayed match</button>
+      <button type="button" data-preset="live">Live</button>
+      <button type="button" data-preset="staleLive">Stale LIVE cache</button>
+      <button type="button" data-preset="ended">Finished</button>
     </div>
     <div class="controls">
       <div class="field">
-        <label for="t">Agora, em relação ao início</label>
+        <label for="t">Now, relative to kickoff</label>
         <span class="tval" id="tlabel">−60 min</span>
         <input id="t" type="range" min="-180" max="150" step="1" value="-60" aria-describedby="tlabel">
       </div>
-      <div class="field"><span class="label" id="dbl">Status no banco</span><div class="seg-ctl" id="db" role="group" aria-labelledby="dbl"></div></div>
-      <div class="field"><span class="label" id="cql">A query devolveu</span><div class="seg-ctl" id="cq" role="group" aria-labelledby="cql"></div></div>
+      <div class="field"><span class="label" id="dbl">Status in the database</span><div class="seg-ctl" id="db" role="group" aria-labelledby="dbl"></div></div>
+      <div class="field"><span class="label" id="cql">The query returned</span><div class="seg-ctl" id="cq" role="group" aria-labelledby="cql"></div></div>
     </div>
     <div class="result">
       <div class="facts">
-        <div class="fact"><span class="k">Fase do cliente</span><span class="v" id="phase"></span></div>
-        <div class="fact"><span class="k">Cache-Control que o subgraph mandaria agora</span><span class="v mono" id="cc"></span></div>
-        <div class="fact"><span class="k">Essa resposta expira</span><span class="v" id="exp"></span></div>
-        <div class="fact"><span class="k">Subscriptions abertas</span><span class="v" id="subs"></span></div>
+        <div class="fact"><span class="k">Client phase</span><span class="v" id="phase"></span></div>
+        <div class="fact"><span class="k">Cache-Control the subgraph would send now</span><span class="v mono" id="cc"></span></div>
+        <div class="fact"><span class="k">This response expires</span><span class="v" id="exp"></span></div>
+        <div class="fact"><span class="k">Open subscriptions</span><span class="v" id="subs"></span></div>
       </div>
       <div class="facts">
-        <h3>O que acontece</h3>
+        <h3>What happens</h3>
         <ol class="steps" id="steps"></ol>
         <div id="callout"></div>
       </div>
@@ -206,59 +206,59 @@ ul.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; max-width: 7
 </section>
 
 <section aria-labelledby="ttl">
-  <h2 id="ttl">O cache do SCHEDULED encolhe até a janela</h2>
-  <p>Longe do início a resposta pode ficar 5 min em cache. Nos últimos 5 min antes da janela, o <code>max-age</code> é o tempo que falta até ela; a menos de 1 s, <code>no-store</code>. Na janela volta a 2 s, como ao vivo. Passe o mouse ou o dedo no gráfico.</p>
+  <h2 id="ttl">The SCHEDULED cache shrinks until the window</h2>
+  <p>Far from kickoff the response can stay cached for 5 min. In the last 5 min before the window, the <code>max-age</code> is the time left until it; under 1 s, <code>no-store</code>. In the window it goes back to 2 s, like live. Hover or drag a finger over the chart.</p>
   <div class="chart-box" id="chartbox">
-    <svg id="chart" viewBox="0 0 720 260" role="img" aria-label="max-age da resposta SCHEDULED, em segundos, de 40 minutos antes do início até 5 minutos depois: 300 até 20 minutos antes, depois cai em linha reta até 0 aos 15 minutos antes, e 2 segundos dentro da janela."></svg>
+    <svg id="chart" viewBox="0 0 720 260" role="img" aria-label="max-age of the SCHEDULED response, in seconds, from 40 minutes before kickoff to 5 minutes after: 300 until 20 minutes before, then it falls in a straight line to 0 at 15 minutes before, and 2 seconds inside the window."></svg>
     <div class="tip" id="tip" hidden></div>
   </div>
-  <p class="caption">Garantia, testada em <code>tests/lifecycle.test.mjs</code> para qualquer instante antes da janela: agora + max-age ≤ kickoff − 15 min.</p>
+  <p class="caption">Guarantee, tested in <code>tests/lifecycle.test.mjs</code> for any instant before the window: now + max-age ≤ kickoff − 15 min.</p>
 </section>
 
-<section aria-labelledby="risco">
-  <h2 id="risco">O que um status antigo pode causar</h2>
+<section aria-labelledby="risk">
+  <h2 id="risk">What a stale status can cause</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>A query devolveu</th><th>O que pode estar errado</th><th>Consequência</th><th>Risco</th></tr></thead>
+    <thead><tr><th>The query returned</th><th>What may be wrong</th><th>Consequence</th><th>Risk</th></tr></thead>
     <tbody>
-      <tr><td><code>FULL_TIME</code></td><td>Nada. É o estado final e não volta atrás.</td><td>Cache longo (1 h) é seguro.</td><td><span class="sev none">nenhum</span></td></tr>
-      <tr><td><code>LIVE</code> / <code>HALF_TIME</code></td><td>A partida já terminou.</td><td>O cliente abre a subscription, o primeiro frame traz <code>FULL_TIME</code> e o stream fecha em seguida. Medido: menos de 1 s, sem reconexão.</td><td><span class="sev low">inofensivo</span></td></tr>
-      <tr><td><code>SCHEDULED</code> na janela</td><td>A partida já começou.</td><td>Nenhuma: o horário manda assinar, e o primeiro frame traz o status real.</td><td><span class="sev none">nenhum</span></td></tr>
-      <tr><td><code>SCHEDULED</code> antes da janela</td><td>A partida começou antes da janela (antecipada sem remarcar).</td><td>O cliente só assina na hora da janela. É o único caso não coberto; remarcar com <code>scheduleMatch</code> evita.</td><td><span class="sev high">fora da regra</span></td></tr>
+      <tr><td><code>FULL_TIME</code></td><td>Nothing. It is the final state and does not go back.</td><td>A long cache (1 h) is safe.</td><td><span class="sev none">none</span></td></tr>
+      <tr><td><code>LIVE</code> / <code>HALF_TIME</code></td><td>The match is already over.</td><td>The client opens the subscription, the first frame brings <code>FULL_TIME</code> and the stream closes right after. Measured: under 1 s, without reconnecting.</td><td><span class="sev low">harmless</span></td></tr>
+      <tr><td><code>SCHEDULED</code> in the window</td><td>The match has already started.</td><td>None: the time says to subscribe, and the first frame brings the real status.</td><td><span class="sev none">none</span></td></tr>
+      <tr><td><code>SCHEDULED</code> before the window</td><td>The match started before the window (brought forward without rescheduling).</td><td>The client only subscribes when the window opens. It is the only uncovered case; rescheduling with <code>scheduleMatch</code> avoids it.</td><td><span class="sev high">outside the rule</span></td></tr>
     </tbody>
   </table></div>
 </section>
 
-<section aria-labelledby="cenarios">
-  <h2 id="cenarios">Cenários testados</h2>
-  <p>Pelo emulador com o cache de queries no pior caso (nunca expira) e janela de 1 s, e no pipeline do Apollo Router com o plugin de retenção.</p>
+<section aria-labelledby="scenarios">
+  <h2 id="scenarios">Tested scenarios</h2>
+  <p>Through the emulator with the worst-case query cache (never expires) and a 1 s window, and in the Apollo Router pipeline with the retention plugin.</p>
   <div class="cases">
-    <div class="case"><h4>Partida encerrada</h4><p>A query devolve <code>FULL_TIME</code>. O cliente mostra o estado final e não assina.</p><div class="out">1 query por canal · 0 subscriptions · nenhum stream no subgraph</div><div class="where">tests/lifecycle.test.mjs</div></div>
-    <div class="case"><h4>Agendada, com SCHEDULED antigo no cache</h4><p>O cache nunca expira e continua dizendo <code>SCHEDULED</code>. O cliente espera a janela pelo relógio e assina mesmo assim.</p><div class="out">0 streams antes da janela · assinou &lt; 500 ms depois dela · cache seguia antigo</div><div class="where">tests/lifecycle.test.mjs</div></div>
-    <div class="case"><h4>Jogo atrasado</h4><p>Passou do horário e ainda está <code>SCHEDULED</code>. O cliente continua assinando, recebe os frames periódicos e o apito chega pelo stream.</p><div class="out">fase live o tempo todo · LIVE e gol recebidos · FULL_TIME fecha os dois canais</div><div class="where">tests/lifecycle.test.mjs</div></div>
-    <div class="case"><h4>Cache antigo dizendo LIVE</h4><p>A partida terminou depois que o cache guardou <code>LIVE</code>. O cliente assina; o primeiro frame é <code>FULL_TIME</code>.</p><div class="out">fases live → over · fechou em &lt; 1 s · 0 reconexões · tudo fechado</div><div class="where">tests/lifecycle.test.mjs</div></div>
-    <div class="case"><h4>Fim com clientes deduplicados</h4><p>Cinco clientes num único upstream. O <code>FULL_TIME</code> termina o stream no subgraph e todos param juntos.</p><div class="out">1 upstream para 5 · todos em over · upstreams fechados</div><div class="where">tests/lifecycle.test.mjs</div></div>
-    <div class="case"><h4>Fim no Apollo Router com o plugin</h4><p>O Router fecha o multipart dos dois clientes. Quem chega depois recebe o estado final do subgraph, não um frame retido do upstream que já fechou.</p><div class="out">os dois streams terminam · retenção limpa · novo cliente: FULL_TIME e fim</div><div class="where">tests/router_pipeline.rs (raiz do repositório)</div></div>
+    <div class="case"><h4>Finished match</h4><p>The query returns <code>FULL_TIME</code>. The client shows the final state and does not subscribe.</p><div class="out">1 query per channel · 0 subscriptions · no stream on the subgraph</div><div class="where">tests/lifecycle.test.mjs</div></div>
+    <div class="case"><h4>Scheduled, with a stale SCHEDULED in the cache</h4><p>The cache never expires and keeps saying <code>SCHEDULED</code>. The client waits for the window by the clock and subscribes anyway.</p><div class="out">0 streams before the window · subscribed &lt; 500 ms after it · cache still stale</div><div class="where">tests/lifecycle.test.mjs</div></div>
+    <div class="case"><h4>Delayed match</h4><p>Past kickoff time and still <code>SCHEDULED</code>. The client keeps subscribing, gets the periodic frames and the whistle arrives through the stream.</p><div class="out">live phase all along · LIVE and goal received · FULL_TIME closes both channels</div><div class="where">tests/lifecycle.test.mjs</div></div>
+    <div class="case"><h4>Stale cache saying LIVE</h4><p>The match ended after the cache stored <code>LIVE</code>. The client subscribes; the first frame is <code>FULL_TIME</code>.</p><div class="out">phases live → over · closed in &lt; 1 s · 0 reconnects · everything closed</div><div class="where">tests/lifecycle.test.mjs</div></div>
+    <div class="case"><h4>End with deduplicated clients</h4><p>Five clients on a single upstream. <code>FULL_TIME</code> ends the stream on the subgraph and all of them stop together.</p><div class="out">1 upstream for 5 · all in over · upstreams closed</div><div class="where">tests/lifecycle.test.mjs</div></div>
+    <div class="case"><h4>End on the Apollo Router with the plugin</h4><p>The Router closes the multipart of both clients. A client arriving later gets the subgraph's final state, not a retained frame from the upstream that already closed.</p><div class="out">both streams end · retention cleared · new client: FULL_TIME and end</div><div class="where">tests/router_pipeline.rs (repository root)</div></div>
   </div>
-  <p class="caption">O último teste achou um problema no plugin: a entrada retida só era liberada quando o cliente era descartado, não quando o stream terminava. Agora ela sai no item final do stream.</p>
+  <p class="caption">The last test found a problem in the plugin: the retained entry was only released when the client was dropped, not when the stream ended. It now goes away on the stream's final item.</p>
 </section>
 
-<section aria-labelledby="limites">
-  <h2 id="limites">Limites</h2>
+<section aria-labelledby="limits">
+  <h2 id="limits">Limits</h2>
   <ul class="plain">
-    <li><b>Jogo antecipado sem remarcação:</b> se a partida começa antes de <code>kickoff − 15 min</code> e ninguém chama <code>scheduleMatch</code>, quem está antes da janela só assina na hora dela.</li>
-    <li><b>Remarcação:</b> <code>scheduleMatch</code> muda o <code>kickoff</code> numa nova versão do placar, então quem assina recebe o horário novo. Quem só fez a query pode ter o antigo por até 5 min; o catálogo tem cache próprio.</li>
-    <li><b>Correção depois do fim</b> (gol anulado na revisão): o <code>FULL_TIME</code> fica em cache por até 1 h, a menos que se invalide o cache nesse evento.</li>
-    <li><b>Estatísticas:</b> o subgraph de estatísticas não conhece o status, então a query delas mantém o cache de 5 s. Quem decide abrir e fechar o canal de estatísticas é o cliente, pelo placar.</li>
+    <li><b>Match brought forward without rescheduling:</b> if the match starts before <code>kickoff − 15 min</code> and nobody calls <code>scheduleMatch</code>, whoever is before the window only subscribes when it opens.</li>
+    <li><b>Rescheduling:</b> <code>scheduleMatch</code> changes the <code>kickoff</code> in a new scoreboard version, so subscribers get the new time. Clients that only made the query may have the old one for up to 5 min; the catalog has its own cache.</li>
+    <li><b>Correction after the end</b> (a goal overturned on review): <code>FULL_TIME</code> stays cached for up to 1 h, unless the cache is invalidated on that event.</li>
+    <li><b>Stats:</b> the stats subgraph does not know the status, so its query keeps the 5 s cache. The client decides when to open and close the stats channel, based on the scoreboard.</li>
   </ul>
 </section>
 
-<section aria-labelledby="codigo">
-  <h2 id="codigo">Onde está</h2>
+<section aria-labelledby="code">
+  <h2 id="code">Where it lives</h2>
   <ul class="plain">
-    <li><code>subgraphs/sports.mjs</code>: <code>matchPhase</code> (fase pela hora e pelo status) e <code>scoreboardMaxAge</code> (Cache-Control por status), usados pelo subgraph e pelo cliente.</li>
-    <li><code>subgraphs/app.mjs</code>: o placar encerra o stream depois do frame <code>FULL_TIME</code>; mutation <code>scheduleMatch</code>.</li>
-    <li><code>client/lifecycle.mjs</code>: <code>watchMatch</code>, a tela de uma partida (query, espera, subscription, fim).</li>
-    <li><code>src/lib.rs</code> (raiz do repositório): a retenção libera a entrada no fim do stream.</li>
+    <li><code>subgraphs/sports.mjs</code>: <code>matchPhase</code> (phase by time and status) and <code>scoreboardMaxAge</code> (Cache-Control by status), used by the subgraph and the client.</li>
+    <li><code>subgraphs/app.mjs</code>: the scoreboard ends the stream after the <code>FULL_TIME</code> frame; the <code>scheduleMatch</code> mutation.</li>
+    <li><code>client/lifecycle.mjs</code>: <code>watchMatch</code>, a match screen (query, wait, subscription, end).</li>
+    <li><code>src/lib.rs</code> (repository root): retention releases the entry at the end of the stream.</li>
   </ul>
 </section>
 
@@ -267,7 +267,7 @@ ul.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; max-width: 7
 (() => {
   const LEAD = 15, SCHEDULED_TTL = 300, LIVE_TTL = 2, FINAL_TTL = 3600;
   const STATUSES = ['SCHEDULED', 'LIVE', 'HALF_TIME', 'FULL_TIME'];
-  // As mesmas regras de src/sports.mjs, em minutos relativos ao início.
+  // The same rules as subgraphs/sports.mjs, in minutes relative to kickoff.
   const phaseOf = (status, t) => {
     if (status === 'FULL_TIME') return { phase: 'over' };
     if (status !== 'SCHEDULED') return { phase: 'live' };
@@ -295,50 +295,50 @@ ul.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; max-width: 7
   $('t').addEventListener('input', e => { state.t = Number(e.target.value); render(); });
 
   const presets = {
-    longe: { t: -120, db: 'SCHEDULED', cq: 'SCHEDULED' },
-    perto: { t: -18, db: 'SCHEDULED', cq: 'SCHEDULED' },
-    janela: { t: -5, db: 'LIVE', cq: 'SCHEDULED' },
-    atraso: { t: 12, db: 'SCHEDULED', cq: 'SCHEDULED' },
-    aovivo: { t: 40, db: 'LIVE', cq: 'LIVE' },
-    liveantigo: { t: 110, db: 'FULL_TIME', cq: 'LIVE' },
-    fim: { t: 130, db: 'FULL_TIME', cq: 'FULL_TIME' }
+    far: { t: -120, db: 'SCHEDULED', cq: 'SCHEDULED' },
+    near: { t: -18, db: 'SCHEDULED', cq: 'SCHEDULED' },
+    window: { t: -5, db: 'LIVE', cq: 'SCHEDULED' },
+    delayed: { t: 12, db: 'SCHEDULED', cq: 'SCHEDULED' },
+    live: { t: 40, db: 'LIVE', cq: 'LIVE' },
+    staleLive: { t: 110, db: 'FULL_TIME', cq: 'LIVE' },
+    ended: { t: 130, db: 'FULL_TIME', cq: 'FULL_TIME' }
   };
   document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => { Object.assign(state, presets[b.dataset.preset]); render(); }));
 
   function render() {
-    $('t').value = state.t; $('tlabel').textContent = state.t === 0 ? 'no horário de início' : `${fmt(state.t)} do início`;
+    $('t').value = state.t; $('tlabel').textContent = state.t === 0 ? 'at kickoff time' : `${fmt(state.t)} from kickoff`;
     for (const [id, key] of [['db', 'db'], ['cq', 'cq']]) $(id).querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === state[key])));
 
     const decision = phaseOf(state.cq, state.t);
-    const labels = { before: 'só a query', live: 'subscription', over: 'encerrada' };
+    const labels = { before: 'query only', live: 'subscription', over: 'finished' };
     $('phase').innerHTML = `<span class="pill ${decision.phase}">${labels[decision.phase]}</span>`;
     const age = maxAge(state.db, state.t);
     $('cc').textContent = age > 0 ? `public, max-age=${age}` : 'no-store';
-    $('exp').textContent = age > 0 ? (state.db === 'SCHEDULED' && state.t < -LEAD ? `em ${dur(age)}, até ${fmt(state.t + age / 60)} do início` : `em ${dur(age)}`) : 'não vai para o cache';
+    $('exp').textContent = age > 0 ? (state.db === 'SCHEDULED' && state.t < -LEAD ? `in ${dur(age)}, by ${fmt(state.t + age / 60)} from kickoff` : `in ${dur(age)}`) : 'is not cached';
 
     const steps = []; let callout = '';
-    steps.push(`A query do placar devolve <code>${state.cq}</code>${state.cq !== state.db ? ' (antigo, do cache)' : ''}.`);
+    steps.push(`The scoreboard query returns <code>${state.cq}</code>${state.cq !== state.db ? ' (stale, from the cache)' : ''}.`);
     if (decision.phase === 'over') {
-      steps.push('O cliente mostra o estado final e não abre nenhuma subscription.');
+      steps.push('The client shows the final state and opens no subscription.');
       $('subs').textContent = '0';
-      callout = '<div class="note ok">FULL_TIME é final: mesmo vindo do cache, está certo.</div>';
+      callout = '<div class="note ok">FULL_TIME is final: even coming from the cache, it is right.</div>';
     } else if (decision.phase === 'before') {
-      steps.push(`Só a query. O cliente agenda a subscription para ${fmt(-LEAD)} do início, pelo relógio.`);
-      steps.push('Na hora da janela assina, sem consultar o status de novo.');
-      $('subs').textContent = '0 agora';
-      if (state.db !== 'SCHEDULED') callout = '<div class="note warn">A partida já começou antes da janela: este é o caso não coberto. O cliente só assina na hora da janela. Remarcar com scheduleMatch evita.</div>';
+      steps.push(`Query only. The client schedules the subscription for ${fmt(-LEAD)} from kickoff, by the clock.`);
+      steps.push('When the window opens it subscribes, without checking the status again.');
+      $('subs').textContent = '0 for now';
+      if (state.db !== 'SCHEDULED') callout = '<div class="note warn">The match already started before the window: this is the uncovered case. The client only subscribes when the window opens. Rescheduling with scheduleMatch avoids it.</div>';
     } else {
-      steps.push('O horário (ou o status) manda assinar: placar e estatísticas.');
+      steps.push('The time (or the status) says to subscribe: scoreboard and stats.');
       if (state.db === 'FULL_TIME') {
-        steps.push('O primeiro frame traz <code>FULL_TIME</code>; o subgraph encerra o stream.');
-        steps.push('O cliente fecha as estatísticas também e não reconecta.');
-        $('subs').textContent = '2, por menos de 1 s';
-        callout = '<div class="note ok">O LIVE do cache estava antigo, e isso custou só uma subscription curta.</div>';
+        steps.push('The first frame brings <code>FULL_TIME</code>; the subgraph ends the stream.');
+        steps.push('The client closes the stats too and does not reconnect.');
+        $('subs').textContent = '2, for under 1 s';
+        callout = '<div class="note ok">The cached LIVE was stale, and that only cost a short subscription.</div>';
       } else {
-        steps.push(`O primeiro frame traz o estado real: <code>${state.db}</code>.`);
-        steps.push(state.db === 'SCHEDULED' ? (state.t >= 0 ? 'Jogo atrasado: o cliente segue assinando e o apito chega pelo stream.' : 'Escalação e apito chegam pelo stream.') : 'Cada mudança chega pelo stream, até o FULL_TIME.');
-        $('subs').textContent = '2 (placar e estatísticas)';
-        if (state.cq !== state.db) callout = '<div class="note ok">O status do cache estava antigo e não fez diferença: o horário decidiu assinar.</div>';
+        steps.push(`The first frame brings the real state: <code>${state.db}</code>.`);
+        steps.push(state.db === 'SCHEDULED' ? (state.t >= 0 ? 'Delayed match: the client keeps subscribing and the whistle arrives through the stream.' : 'Line-ups and the whistle arrive through the stream.') : 'Every change arrives through the stream, until FULL_TIME.');
+        $('subs').textContent = '2 (scoreboard and stats)';
+        if (state.cq !== state.db) callout = '<div class="note ok">The cached status was stale and it made no difference: the time decided to subscribe.</div>';
       }
     }
     $('steps').innerHTML = steps.map(s => `<li>${s}</li>`).join('');
@@ -346,7 +346,7 @@ ul.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; max-width: 7
     drawMarker();
   }
 
-  // Gráfico: max-age (s) de uma resposta SCHEDULED entre −40 e +5 min do início.
+  // Chart: max-age (s) of a SCHEDULED response between −40 and +5 min from kickoff.
   const svg = $('chart'), NS = 'http://www.w3.org/2000/svg';
   const W = 720, H = 260, L = 52, R = 16, T = 18, B = 40, X0 = -40, X1 = 5, Y1 = 300;
   const x = m => L + (m - X0) / (X1 - X0) * (W - L - R);
@@ -354,15 +354,15 @@ ul.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; max-width: 7
   const el = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; svg.appendChild(e); return e; };
   el('rect', { class: 'window', x: x(-LEAD), y: T, width: x(X1) - x(-LEAD), height: H - T - B });
   for (const s of [0, 100, 200, 300]) { el('line', { class: 'grid', x1: L, x2: W - R, y1: y(s), y2: y(s) }); el('text', { x: L - 8, y: y(s) + 4, 'text-anchor': 'end' }, `${s}s`); }
-  for (const m of [-40, -30, -20, -15, -10, 0, 5]) el('text', { x: x(m), y: H - B + 18, 'text-anchor': 'middle' }, m === 0 ? 'início' : `${m > 0 ? '+' : '−'}${Math.abs(m)}`);
-  el('text', { x: (L + W - R) / 2, y: H - 6, 'text-anchor': 'middle' }, 'minutos em relação ao início');
+  for (const m of [-40, -30, -20, -15, -10, 0, 5]) el('text', { x: x(m), y: H - B + 18, 'text-anchor': 'middle' }, m === 0 ? 'kickoff' : `${m > 0 ? '+' : '−'}${Math.abs(m)}`);
+  el('text', { x: (L + W - R) / 2, y: H - 6, 'text-anchor': 'middle' }, 'minutes relative to kickoff');
   el('line', { class: 'axis', x1: L, x2: W - R, y1: y(0), y2: y(0) });
   const pts = []; for (let m = X0; m <= X1; m += 0.25) pts.push([m, maxAge('SCHEDULED', m)]);
   const path = pts.map(([m, s], i) => `${i ? 'L' : 'M'}${x(m).toFixed(1)},${y(s).toFixed(1)}`).join('');
   el('path', { class: 'area', d: `${path}L${x(X1)},${y(0)}L${x(X0)},${y(0)}Z` });
   el('path', { class: 'series', d: path });
-  el('text', { class: 'lbl', x: x(-30), y: y(300) - 6, 'text-anchor': 'middle' }, 'até 5 min');
-  el('text', { class: 'lbl', x: x(-LEAD) + 6, y: T + 14 }, 'janela: subscription');
+  el('text', { class: 'lbl', x: x(-30), y: y(300) - 6, 'text-anchor': 'middle' }, 'up to 5 min');
+  el('text', { class: 'lbl', x: x(-LEAD) + 6, y: T + 14 }, 'window: subscription');
   const marker = el('circle', { class: 'mark', r: 5, cx: -99, cy: -99 });
   const nowLine = el('line', { class: 'now', x1: -99, x2: -99, y1: T, y2: H - B });
   function drawMarker() {

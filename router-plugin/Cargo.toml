@@ -10,7 +10,7 @@ name = "router"
 path = "src/main.rs"
 
 [dependencies]
-apollo-router = "=2.10.5"
+apollo-router = "=2.18.0"
 anyhow = "1"
 async-trait = "0.1"
 futures = "0.3"

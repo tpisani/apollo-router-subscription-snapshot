@@ -1,6 +1,6 @@
 # Router customizado com `poc.retain_last_frame`
 
-Apollo Router 2.10.5 com um plugin nativo que guarda o último evento de cada
+Apollo Router 2.18.0 com um plugin nativo que guarda o último evento de cada
 subscription deduplicada. Quem entra num upstream já aberto recebe esse estado na
 hora, em vez de esperar o próximo frame do subgraph.
 
@@ -29,7 +29,7 @@ plugins:
 
 ## Compilar e testar (sem licença)
 
-Precisa de Rust 1.94.1+ (exigido pelas dependências do `Cargo.lock`; testado com 1.97) e `protoc` (`apt-get install protobuf-compiler`). A primeira
+Precisa de Rust 1.97.1 (o mínimo do apollo-router 2.18.0, fixado em `rust-toolchain.toml`; o rustup instala sozinho) e `protoc` (`apt-get install protobuf-compiler libprotobuf-dev`). A primeira
 compilação do Router leva ~20 min.
 
 ```bash
@@ -130,8 +130,15 @@ O mesmo roteiro roda no `npm test` contra o emulador
 Para deixar o efeito da retenção mais visível, aumente o frame periódico:
 `SCOREBOARD_PERIODIC_MS=3000 docker compose --profile apollo-plugin up -d`.
 
-## Suporte
+## Suporte e atualizações
 
-A Apollo não dá suporte a plugins nativos nem a binários customizados. Manter o
-plugin significa recompilar a cada versão do Router e acompanhar mudanças internas,
-como a forma do stream da subscription descrita acima.
+A Apollo não dá suporte a plugins nativos nem a binários customizados. Cada versão
+nova do Router exige recompilar e rodar `npm run test:router-harness`.
+[`docs/router-upgrades.md`](../docs/router-upgrades.md) compara 20 versões
+(1.61 a 2.18) e mostra o que costuma quebrar:
+- **O código do plugin:** raramente. Ele compilou e passou em todos os testes na
+  2.18.0 sem mudanças.
+- **Em volta dele:** com frequência. A versão do Rust, a config YAML do Router (que
+  não serve para duas versões ao mesmo tempo) e dependências como o `schemars`.
+
+O guia também traz o passo a passo de atualização.

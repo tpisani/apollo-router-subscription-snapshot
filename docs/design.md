@@ -106,7 +106,7 @@ upstream deduplicado:
 - **Coprocessor:** não cria um frame quando o cliente se conecta.
 
 Por isso é um **plugin nativo em Rust** num build customizado
-(`router-plugin/`, `poc.retain_last_frame`, apollo-router 2.10.5).
+(`router-plugin/`, `poc.retain_last_frame`, apollo-router 2.18.0).
 `scripts/edge.mjs` faz o mesmo no emulador.
 
 - **Retenção:** guarda o último evento (com dados e sem erros) de cada chave e o

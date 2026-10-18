@@ -16,8 +16,11 @@ const subgraphs = await startSubgraphs({
 const base = name => `http://127.0.0.1:${subgraphs.ports[name]}`;
 const supergraph = join(dir, 'supergraph.graphql');
 writeFileSync(supergraph, composeSupergraph({ scoresUrl: `${base('scores')}/graphql`, catalogUrl: `${base('catalog')}/graphql`, statsUrl: `${base('stats')}/graphql` }));
-const cargo = spawn('cargo', ['test', '--release', '--', '--ignored', '--nocapture', '--test-threads=1'], {
-  cwd: new URL('../router-plugin/', import.meta.url), stdio: 'inherit',
+// PLUGIN_DIR: outra cópia do plugin (ex.: compilada contra uma versão nova do Router,
+// para conferir uma atualização); CARGO_TOOLCHAIN: ex. 1.97.1.
+const toolchain = process.env.CARGO_TOOLCHAIN ? [`+${process.env.CARGO_TOOLCHAIN}`] : [];
+const cargo = spawn('cargo', [...toolchain, 'test', '--release', '--', '--include-ignored', '--nocapture', '--test-threads=1'], {
+  cwd: process.env.PLUGIN_DIR ?? new URL('../router-plugin/', import.meta.url), stdio: 'inherit',
   env: { ...process.env, SUPERGRAPH: supergraph, SCORES_URL: base('scores') }
 });
 const code = await new Promise(resolve => cargo.once('exit', resolve));

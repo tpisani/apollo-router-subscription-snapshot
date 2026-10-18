@@ -10,7 +10,9 @@ supergraph:
 subscription:
   enabled: true
   deduplication:
-    enabled: true
+    # Desde a 2.15, por subgraph ou para todos (all).
+    all:
+      enabled: true
   mode:
     passthrough:
       subgraphs:
@@ -26,8 +28,10 @@ subscription:
 headers:
   all:
     request:
-      - propagate:
-          named: authorization
+      # Desde a 2.18, as regras ficam em operations.
+      operations:
+        - propagate:
+            named: authorization
 plugins:
   poc.retain_last_frame:
     enabled: ${env.RETAIN_ENABLED:-true}

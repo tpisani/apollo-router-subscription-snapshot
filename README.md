@@ -107,7 +107,9 @@ MODE=callback npm run test:router-real   # o mesmo com os subgraphs no modo call
 docker compose --profile apollo-plugin up --build -d && npm run test:router-scale
 ```
 
-Detalhes em [`router-plugin/README.md`](router-plugin/README.md).
+Detalhes em [`router-plugin/README.md`](router-plugin/README.md). O que costuma
+quebrar ao atualizar o Router (20 versões comparadas, plugin testado na 2.18):
+[`docs/router-upgrades.md`](docs/router-upgrades.md).
 
 ## Testes, experimentos e benchmark
 

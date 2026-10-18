@@ -7,10 +7,10 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "start": "node src/server.mjs",
+    "start": "node subgraphs/server.mjs",
     "compose-schema": "node scripts/compose.mjs",
     "gateway": "hive-gateway supergraph gateway/supergraph.graphql -c gateway/gateway.config.mjs",
-    "edge": "node scripts/edge.mjs",
+    "edge": "node emulator/edge.mjs",
     "client": "node client/main.mjs",
     "demo": "node scripts/demo.mjs",
     "bench": "node scripts/bench.mjs",

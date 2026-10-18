@@ -3,7 +3,7 @@ import { execSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createSync, runSync, statsFromWire } from '../client/sync.mjs';
 import { graphql, snapshotApi, transports } from '../client/transport.mjs';
-import { playGenerator } from '../src/sports.mjs';
+import { playGenerator } from '../subgraphs/sports.mjs';
 import { watchMatch } from '../client/lifecycle.mjs';
 
 // O plano gratuito do GraphOS limita requisições por instância (503

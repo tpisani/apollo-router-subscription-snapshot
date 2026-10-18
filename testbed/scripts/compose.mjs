@@ -1,7 +1,7 @@
 import { composeServices } from '@apollo/composition';
 import { parse } from 'graphql';
 import { writeFileSync } from 'node:fs';
-import { scoresSDL, statsSDL, catalogSDL } from '../src/schemas.mjs';
+import { scoresSDL, statsSDL, catalogSDL } from '../subgraphs/schemas.mjs';
 
 // Supergraph para o Hive Gateway e o Apollo Router: placar e estatísticas em
 // subgraphs separados, cada um com sua subscription.

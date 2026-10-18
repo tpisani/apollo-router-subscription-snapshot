@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
-import { startStack } from '../scripts/stack.mjs';
+import { startStack } from '../emulator/stack.mjs';
 import { verify } from '../scripts/verify.mjs';
 import { createSync, runSync } from '../client/sync.mjs';
 import { snapshotApi, transports } from '../client/transport.mjs';
-import { scoreboardOps, applyStatEvents, playGenerator } from '../src/sports.mjs';
+import { scoreboardOps, applyStatEvents, playGenerator } from '../subgraphs/sports.mjs';
 
 async function until(predicate, message, ms = 10_000) {
   for (const end = Date.now() + ms; Date.now() < end; await delay(10)) if (predicate()) return;

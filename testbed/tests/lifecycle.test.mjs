@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
-import { matchPhase, scoreboardMaxAge } from '../src/sports.mjs';
-import { startStack } from '../scripts/stack.mjs';
+import { matchPhase, scoreboardMaxAge } from '../subgraphs/sports.mjs';
+import { startStack } from '../emulator/stack.mjs';
 import { watchMatch } from '../client/lifecycle.mjs';
 import { graphql, snapshotApi, transports } from '../client/transport.mjs';
 

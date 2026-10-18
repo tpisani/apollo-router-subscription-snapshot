@@ -1,6 +1,6 @@
 import { watchMatch } from './lifecycle.mjs';
 import { snapshotApi, transports } from './transport.mjs';
-import { clockSeconds } from '../src/sports.mjs';
+import { clockSeconds } from '../subgraphs/sports.mjs';
 
 // Padrão: edge local (dedup + cache, multipart como o Router). Para o Apollo Router,
 // GRAPHQL_URL=http://localhost:4100/graphql; para o Hive direto, :4000 com TRANSPORT=ws.

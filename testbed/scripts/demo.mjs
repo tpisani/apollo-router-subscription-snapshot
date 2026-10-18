@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { graphql } from '../client/transport.mjs';
-import { playGenerator } from '../src/sports.mjs';
+import { playGenerator } from '../subgraphs/sports.mjs';
 
 // Simula o provedor de dados pela API (mutations): lances a EVENTS_PER_SECOND e um
 // gol a cada GOAL_EVERY_S segundos. Rode `npm run client` em outro terminal.

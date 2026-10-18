@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Store } from '../src/store.mjs';
-import { ChannelHub, LiveStream } from '../src/channels.mjs';
-import { applyPatch } from '../src/patch.mjs';
-import { initialScoreboard, initialStats, scoreboardOps, applyStatEvents, playGenerator } from '../src/sports.mjs';
+import { Store } from '../subgraphs/store.mjs';
+import { ChannelHub, LiveStream } from '../subgraphs/channels.mjs';
+import { applyPatch } from '../subgraphs/patch.mjs';
+import { initialScoreboard, initialStats, scoreboardOps, applyStatEvents, playGenerator } from '../subgraphs/sports.mjs';
 
 function setup(mode, options = {}, initial = mode === 'state' ? initialScoreboard : initialStats) {
   let hub;

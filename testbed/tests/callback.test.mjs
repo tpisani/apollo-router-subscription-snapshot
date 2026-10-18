@@ -5,8 +5,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { startSubgraphs } from '../src/app.mjs';
-import { scoreboardOps } from '../src/sports.mjs';
+import { startSubgraphs } from '../subgraphs/app.mjs';
+import { scoreboardOps } from '../subgraphs/sports.mjs';
 
 async function until(predicate, message, ms = 5000) {
   for (const end = Date.now() + ms; Date.now() < end; await delay(10)) if (predicate()) return;

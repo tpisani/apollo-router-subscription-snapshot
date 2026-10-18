@@ -1,9 +1,7 @@
 //! Apollo Router binary with the `globo.subscription_snapshot` plugin.
 
-#[cfg(test)]
-mod harness;
-// Adding the module registers the plugin in the Router plugin registry.
-mod snapshot;
+// Linking the library registers the plugin in the Router plugin registry.
+use router_subscription_snapshot as _;
 
 fn main() -> anyhow::Result<()> {
     apollo_router::main()

@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { diff, applyPatch, mergePatches } from '../src/patch.mjs';
-import { Store, SnapshotCache } from '../src/store.mjs';
-import { initialScoreboard, initialStats, scoreboardOps, clockSeconds, applyStatEvents, playGenerator } from '../src/sports.mjs';
+import { diff, applyPatch, mergePatches } from '../subgraphs/patch.mjs';
+import { Store, SnapshotCache } from '../subgraphs/store.mjs';
+import { initialScoreboard, initialStats, scoreboardOps, clockSeconds, applyStatEvents, playGenerator } from '../subgraphs/sports.mjs';
 
 test('patch: diff + applyPatch reconstroem o estado; merge mantém o último valor', () => {
   const a = { home: { shots: 1, passes: 10 }, players: { h1: { passes: 3 } } };

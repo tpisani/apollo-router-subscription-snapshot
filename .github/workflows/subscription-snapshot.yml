@@ -1,28 +1,24 @@
 name: subscription_snapshot
 on:
   push:
-    paths: ['router-subscription-snapshot/**', 'router/**', 'scripts/router-harness.mjs', '.github/workflows/subscription-snapshot.yml']
+    paths: ['src/**', 'tests/**', 'examples/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'rustfmt.toml', 'testbed/subgraphs/**', 'testbed/scripts/router-harness.mjs', 'testbed/scripts/compose.mjs', 'testbed/package-lock.json', '.github/workflows/subscription-snapshot.yml']
   pull_request:
-    paths: ['router-subscription-snapshot/**', 'router/**', 'scripts/router-harness.mjs', '.github/workflows/subscription-snapshot.yml']
+    paths: ['src/**', 'tests/**', 'examples/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'rustfmt.toml', 'testbed/subgraphs/**', 'testbed/scripts/router-harness.mjs', 'testbed/scripts/compose.mjs', 'testbed/package-lock.json', '.github/workflows/subscription-snapshot.yml']
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: router-subscription-snapshot
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: testbed/package-lock.json
       - run: npm ci --ignore-scripts
-        working-directory: .
+        working-directory: testbed
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: router-subscription-snapshot
       # Same lints as the Apollo Router repository (xtask lint).
       - run: cargo fmt --all --check
       - run: cargo clippy --release --locked --all-targets --no-deps -- -D warnings
@@ -33,8 +29,8 @@ jobs:
       - run: cargo test --release --locked
       - run: cargo build --release --locked
       # The apollo-plugin profile configuration, validated by the binary with the plugin.
-      - run: ./target/release/router config validate ../router/router-plugin.yaml
-      - run: ./target/release/router config validate ../router/router-plugin-callback.yaml
+      - run: ./target/release/router config validate examples/router/router-plugin.yaml
+      - run: ./target/release/router config validate examples/router/router-plugin-callback.yaml
       # The plugin in the Router pipeline (TestHarness), against the Node subgraphs.
       - run: npm run test:router-harness
-        working-directory: .
+        working-directory: testbed

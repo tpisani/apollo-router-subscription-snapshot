@@ -46,7 +46,7 @@ export async function startBalancer({ targets, port = 0, host = '127.0.0.1' }) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  // TARGETS=http://router-a:4100,http://router-b:4100 LB_PORT=4200 node scripts/balancer.mjs
+  // TARGETS=http://router-a:4100,http://router-b:4100 LB_PORT=4200 node emulator/balancer.mjs
   const targets = (process.env.TARGETS ?? '').split(',').filter(Boolean);
   if (!targets.length) throw new Error('TARGETS vazio');
   const lb = await startBalancer({ targets, port: Number(process.env.LB_PORT ?? 4200), host: process.env.LB_HOST ?? '0.0.0.0' });

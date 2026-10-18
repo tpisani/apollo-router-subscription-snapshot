@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createSync, statsFromWire, runSync } from '../client/sync.mjs';
 import { graphql, snapshotApi, transports } from '../client/transport.mjs';
-import { playGenerator } from '../src/sports.mjs';
+import { playGenerator } from '../subgraphs/sports.mjs';
 
 async function until(predicate, message, ms = 10_000) {
   for (const end = Date.now() + ms; Date.now() < end; await delay(10)) if (await predicate()) return;

@@ -1,6 +1,6 @@
 import test from 'node:test';
-import { startStack } from '../scripts/stack.mjs';
-import { startEdge } from '../scripts/edge.mjs';
+import { startStack } from '../emulator/stack.mjs';
+import { startEdge } from '../emulator/edge.mjs';
 import { verifyRouterScale } from '../scripts/verify-router-scale.mjs';
 
 // O mesmo roteiro que roda contra os Routers com o plugin (npm run test:router-scale),

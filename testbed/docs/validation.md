@@ -8,7 +8,9 @@ com os mesmos resultados (próxima seção).
 O plugin se chamava `poc.retain_last_frame`, com a marca `extensions.retainedFrame`,
 na pasta `router-plugin/`. Foi renomeado para `subscription_snapshot`, com a marca
 `extensions.snapshot`, na pasta `router-subscription-snapshot/`, sem mudar o
-comportamento. Os resultados abaixo valem para o mesmo código.
+comportamento. Os resultados abaixo valem para o mesmo código. Depois, o crate foi
+para a raiz do repositório (lib + bin) e o resto da POC para `testbed/`; os caminhos
+abaixo são os da época.
 
 ## Atualização para a 2.18.0
 
@@ -159,7 +161,7 @@ não houver deduplicação.
   `{ data: null }`, frames como `next`, e um 404 do Router fecha o stream sem
   `complete`. Esse teste achou um `complete` indevido depois do 404, corrigido.
 
-## Plugin do Router (`router-subscription-snapshot/`, `subscription_snapshot`)
+## Plugin do Router (raiz do repositório, `globo.subscription_snapshot`)
 
 - **`cargo test --release` (8):** inclui a liberação no fim do stream; o marcador passa intacto; o primeiro assinante
   não recebe frame retido e alimenta o store; o late joiner recebe o retido logo

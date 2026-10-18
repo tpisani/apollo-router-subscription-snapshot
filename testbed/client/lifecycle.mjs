@@ -1,5 +1,5 @@
 import { createSync, runSync, isFinalScoreboard } from './sync.mjs';
-import { matchPhase, LIVE_LEAD_MS } from '../src/sports.mjs';
+import { matchPhase, LIVE_LEAD_MS } from '../subgraphs/sports.mjs';
 
 // Ciclo de vida de uma tela de partida: query ou subscription conforme o horário e
 // o status.

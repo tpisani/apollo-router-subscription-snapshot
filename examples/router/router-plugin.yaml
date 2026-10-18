@@ -1,4 +1,4 @@
-# Router customizado (router-subscription-snapshot/) com o plugin subscription_snapshot.
+# Router customizado (crate da raiz do repositório) com o plugin globo.subscription_snapshot.
 # Exige APOLLO_KEY/APOLLO_GRAPH_REF com subscriptions federadas (inclusas no plano
 # gratuito do GraphOS). Sem response cache, para depender só de subscriptions.
 #   RETAIN_ENABLED=false desliga a retenção (instância de comparação).

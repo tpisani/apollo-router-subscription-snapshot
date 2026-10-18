@@ -1,6 +1,6 @@
-import { Store } from '../src/store.mjs';
-import { ChannelHub } from '../src/channels.mjs';
-import { initialScoreboard, initialStats, scoreboardOps, applyStatEvents, playGenerator } from '../src/sports.mjs';
+import { Store } from '../subgraphs/store.mjs';
+import { ChannelHub } from '../subgraphs/channels.mjs';
+import { initialScoreboard, initialStats, scoreboardOps, applyStatEvents, playGenerator } from '../subgraphs/sports.mjs';
 
 // Experimentos de desenho com os hubs reais e tempo simulado (o chamador controla
 // o relógio, ex.: mock.timers do node:test). Gera uma partida e devolve, para

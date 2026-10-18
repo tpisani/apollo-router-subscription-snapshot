@@ -82,37 +82,38 @@ versões**: ela tem de acompanhar o binário.
 Feita como descrito abaixo, com o resultado:
 - **Código do plugin:** nenhuma mudança.
 - **Dependência e toolchain:** `apollo-router = "=2.18.0"` e um `Cargo.lock` novo;
-  Rust fixado em 1.97.1 (`router-subscription-snapshot/rust-toolchain.toml` e
+  Rust fixado em 1.97.1 (`rust-toolchain.toml` e
   `rust:1.97.1-bookworm` no Dockerfile).
 - **Configs:** `router.yaml`, `router-plugin.yaml` e `router-plugin-callback.yaml`
   migradas à mão, para manter os comentários: `deduplication.all.enabled` e
   `headers.all.request.operations`. Com isso, `router config upgrade` não tem mais
   nada a migrar. A imagem oficial do perfil `apollo` também foi para a v2.18.0.
-- **Testes:** os mesmos de antes, todos passando (ver [validação](validation.md)).
+- **Testes:** os mesmos de antes, todos passando (ver [validação](../testbed/docs/validation.md)).
 
 ## Como atualizar o Router
 
-1. **Trocar a versão:** `apollo-router = "=X.Y.Z"` no `router-subscription-snapshot/Cargo.toml`.
+1. **Trocar a versão:** `apollo-router = "=X.Y.Z"` no `Cargo.toml`.
    Ver a versão mínima do Rust (`rust-version` do crate) e a do
-   `router-subscription-snapshot/Dockerfile`.
+   `Dockerfile`.
 2. **Compilar:** `cargo build --release`. Se quebrar, o mais provável é uma
    dependência como o `schemars`; alinhar com a do Router.
-3. **Migrar a config:** `./target/release/router config upgrade ../router/router-plugin.yaml`
+3. **Migrar a config:** `./target/release/router config upgrade examples/router/router-plugin.yaml`
    (e a de callback), revisar o resultado e validar com `config validate`.
-4. **Testar no pipeline do Router:** `npm run test:router-harness`. É o que pega
+4. **Testar no pipeline do Router:** `npm run test:router-harness` (em `testbed/`). É o que pega
    mudança no contrato do stream.
 5. **Com a chave do GraphOS:** `npm run test:router-real` e
-   `MODE=callback npm run test:router-real`.
+   `MODE=callback npm run test:router-real` (em `testbed/`).
 
 Para testar uma versão nova sem mexer na pasta do plugin:
 
 ```bash
-# ex.: da 2.18.0 para X.Y.Z, com o Rust mínimo dela (R)
-cp -r router-subscription-snapshot /tmp/plugin-novo && sed -i 's/=2.18.0/=X.Y.Z/' /tmp/plugin-novo/Cargo.toml
-PLUGIN_DIR=/tmp/plugin-novo CARGO_TOOLCHAIN=R npm run test:router-harness
+# ex.: da 2.18.0 para X.Y.Z, com o Rust mínimo dela (R); na raiz do repositório
+mkdir /tmp/plugin-novo && cp -r Cargo.toml Cargo.lock src tests /tmp/plugin-novo/
+sed -i 's/=2.18.0/=X.Y.Z/' /tmp/plugin-novo/Cargo.toml
+(cd testbed && PLUGIN_DIR=/tmp/plugin-novo CARGO_TOOLCHAIN=R npm run test:router-harness)
 (cd /tmp/plugin-novo && cargo +R build --release)
-/tmp/plugin-novo/target/release/router config upgrade router/router-plugin.yaml > /tmp/cfg/router-plugin.yaml   # idem callback
-ROUTER_BIN=/tmp/plugin-novo/target/release/router ROUTER_CONFIG_DIR=/tmp/cfg npm run test:router-real
+mkdir -p /tmp/cfg && /tmp/plugin-novo/target/release/router config upgrade examples/router/router-plugin.yaml > /tmp/cfg/router-plugin.yaml   # idem callback
+(cd testbed && ROUTER_BIN=/tmp/plugin-novo/target/release/router ROUTER_CONFIG_DIR=/tmp/cfg npm run test:router-real)
 ```
 
 Atenção: `config upgrade` escreve os avisos no mesmo stdout do YAML; remova as

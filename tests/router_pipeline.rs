@@ -4,8 +4,8 @@
 //! `TestHarness` uses an unrestricted license in tests only; it does not replace
 //! running the binary with GraphOS (`npm run test:router-scale`).
 //!
-//! Needs the subgraphs running; `npm run test:router-harness` starts everything and
-//! runs:
+//! Needs the subgraphs from `testbed/` running; `npm run test:router-harness` (in
+//! `testbed/`) starts everything and runs:
 //!   SUPERGRAPH=... SCORES_URL=http://127.0.0.1:4001 cargo test --release -- --ignored
 
 use std::time::Duration;
@@ -23,6 +23,9 @@ use serde_json::json;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
+
+// Linking the library registers the plugin in the Router plugin registry.
+use router_subscription_snapshot as _;
 
 const SCOREBOARD: &str = "subscription Scoreboard($matchId: ID!) { scoreboardUpdates(matchId: $matchId) { matchId version state { status home away } } }";
 

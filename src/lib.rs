@@ -12,7 +12,7 @@
 //! The snapshot is therefore inserted after item 1: inserted before it, it would
 //! become the marker and be lost.
 //!
-//! A subscriber leaves the [`Store`] when its stream ends or when the client is
+//! A subscriber leaves the `Store` when its stream ends or when the client is
 //! dropped, whichever comes first.
 //!
 //! This is only correct because every frame carries the whole state and a version:

@@ -1,8 +1,8 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { createSync, runSync } from '../client/sync.mjs';
 import { snapshotApi, transports } from '../client/transport.mjs';
-import { scoreboardOps, applyStatEvents, playGenerator } from '../src/sports.mjs';
-import { startStack } from './stack.mjs';
+import { scoreboardOps, applyStatEvents, playGenerator } from '../subgraphs/sports.mjs';
+import { startStack } from '../emulator/stack.mjs';
 
 // Partida simulada com clientes reais pelo edge (dedup + retenção + cache, multipart como o Router);
 // EDGES=3 coloca 3 instâncias atrás de um balanceador round-robin:

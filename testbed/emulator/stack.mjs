@@ -4,8 +4,8 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { startSubgraphs } from '../src/app.mjs';
-import { composeSupergraph } from './compose.mjs';
+import { startSubgraphs } from '../subgraphs/app.mjs';
+import { composeSupergraph } from '../scripts/compose.mjs';
 import { startEdge } from './edge.mjs';
 import { startBalancer } from './balancer.mjs';
 

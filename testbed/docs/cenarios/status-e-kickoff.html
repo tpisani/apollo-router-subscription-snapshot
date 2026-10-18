@@ -169,7 +169,7 @@ ul.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; max-width: 7
 
 <section aria-labelledby="simulador">
   <h2 id="simulador">Simulador</h2>
-  <p>Escolha o instante e os dois status: o que está no banco e o que a query do cliente devolveu (que pode vir antiga do cache). As regras são as mesmas de <code>src/sports.mjs</code>, com a janela de 15 min.</p>
+  <p>Escolha o instante e os dois status: o que está no banco e o que a query do cliente devolveu (que pode vir antiga do cache). As regras são as mesmas de <code>subgraphs/sports.mjs</code>, com a janela de 15 min.</p>
   <div class="sim">
     <div class="presets"><span class="label">Cenários</span>
       <button type="button" data-preset="longe">Longe do início</button>
@@ -255,10 +255,10 @@ ul.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; max-width: 7
 <section aria-labelledby="codigo">
   <h2 id="codigo">Onde está</h2>
   <ul class="plain">
-    <li><code>src/sports.mjs</code>: <code>matchPhase</code> (fase pela hora e pelo status) e <code>scoreboardMaxAge</code> (Cache-Control por status), usados pelo subgraph e pelo cliente.</li>
-    <li><code>src/app.mjs</code>: o placar encerra o stream depois do frame <code>FULL_TIME</code>; mutation <code>scheduleMatch</code>.</li>
+    <li><code>subgraphs/sports.mjs</code>: <code>matchPhase</code> (fase pela hora e pelo status) e <code>scoreboardMaxAge</code> (Cache-Control por status), usados pelo subgraph e pelo cliente.</li>
+    <li><code>subgraphs/app.mjs</code>: o placar encerra o stream depois do frame <code>FULL_TIME</code>; mutation <code>scheduleMatch</code>.</li>
     <li><code>client/lifecycle.mjs</code>: <code>watchMatch</code>, a tela de uma partida (query, espera, subscription, fim).</li>
-    <li><code>router-subscription-snapshot/src/snapshot.rs</code>: a retenção libera a entrada no fim do stream.</li>
+    <li><code>src/lib.rs</code> (raiz do repositório): a retenção libera a entrada no fim do stream.</li>
   </ul>
 </section>
 

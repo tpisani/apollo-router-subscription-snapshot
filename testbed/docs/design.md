@@ -13,8 +13,8 @@
   frame periódico.
 - **As subscriptions só têm `matchId`:** o Router deduplica, com um upstream por
   canal e partida em cada instância.
-- **Retenção do último frame** (plugin nativo do Router em `router-subscription-snapshot/`, e o
-  mesmo comportamento no emulador `scripts/edge.mjs`): quem entra num upstream já
+- **Retenção do último frame** (plugin nativo do Router na [raiz do repositório](../../README.md), e o
+  mesmo comportamento no emulador `emulator/edge.mjs`): quem entra num upstream já
   aberto recebe o estado na hora, em vez de esperar o frame periódico.
 - **Várias instâncias:** cada uma deduplica e retém só os seus upstreams, e isso
   basta. Ninguém precisa compartilhar o último estado.
@@ -106,8 +106,8 @@ upstream deduplicado:
 - **Coprocessor:** não cria um frame quando o cliente se conecta.
 
 Por isso é um **plugin nativo em Rust** num build customizado
-(`router-subscription-snapshot/`, `subscription_snapshot`, apollo-router 2.18.0).
-`scripts/edge.mjs` faz o mesmo no emulador.
+(raiz do repositório, `globo.subscription_snapshot`, apollo-router 2.18.0).
+`emulator/edge.mjs` faz o mesmo no emulador.
 
 - **Retenção:** guarda o último evento (com dados e sem erros) de cada chave e o
   entrega primeiro a quem entra. O frame retido some quando o último assinante da
@@ -165,7 +165,7 @@ clientes ──LB──┬── instância A ─ 1 upstream por (canal, partida
 ## Ciclo de vida: query ou subscription
 
 Partida que não começou ou já terminou não precisa de subscription. O cliente
-(`client/lifecycle.mjs`) decide assim (regras em `src/sports.mjs`):
+(`client/lifecycle.mjs`) decide assim (regras em `subgraphs/sports.mjs`):
 
 - **O horário decide quando começar:** antes de `kickoff − 15 min`, só a query; a
   partir daí, subscription, seja qual for o status que a query devolveu. Um jogo

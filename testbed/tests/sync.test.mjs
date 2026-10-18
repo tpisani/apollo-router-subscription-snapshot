@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Store, SnapshotCache } from '../src/store.mjs';
-import { initialScoreboard, initialStats, scoreboardOps, applyStatEvents, playGenerator } from '../src/sports.mjs';
+import { Store, SnapshotCache } from '../subgraphs/store.mjs';
+import { initialScoreboard, initialStats, scoreboardOps, applyStatEvents, playGenerator } from '../subgraphs/sports.mjs';
 import { StateSync, createSync, statsFromWire, runSession } from '../client/sync.mjs';
 
 const matchId = 'm1';

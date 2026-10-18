@@ -3,34 +3,35 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { startSubgraphs } from '../src/app.mjs';
+import { startSubgraphs } from '../subgraphs/app.mjs';
 import { composeSupergraph } from './compose.mjs';
-import { startBalancer } from './balancer.mjs';
+import { startBalancer } from '../emulator/balancer.mjs';
 import { verifyRouterScale } from './verify-router-scale.mjs';
 
-// O teste de verdade, sem Docker: o binário de router-subscription-snapshot/ (apollo-router 2.18.0 +
+// O teste de verdade, sem Docker: o binário da raiz do repositório (apollo-router 2.18.0 +
 // subscription_snapshot) com GraphOS, em 3 instâncias com retenção atrás de um
 // balanceador e 1 sem retenção, contra os subgraphs Node. Os processos herdam o
 // ambiente (proxy, CA), o que os containers do compose não fazem numa sessão na nuvem.
 // Exige APOLLO_KEY e APOLLO_GRAPH_REF no ambiente; nunca os imprime.
 //   npm run test:router-real                  (subgraphs por WebSocket, passthrough)
 //   MODE=callback npm run test:router-real    (subgraphs por HTTP callback)
-const root = new URL('..', import.meta.url).pathname;
+// Raiz do repositório: o crate do plugin e examples/router/.
+const root = new URL('../..', import.meta.url).pathname;
 // ROUTER_BIN: outro binário (ex.: o plugin compilado contra uma versão nova do Router).
-const bin = process.env.ROUTER_BIN ?? join(root, 'router-subscription-snapshot/target/release/router');
+const bin = process.env.ROUTER_BIN ?? join(root, 'target/release/router');
 if (!process.env.APOLLO_KEY || !process.env.APOLLO_GRAPH_REF) {
   console.error('Defina APOLLO_KEY e APOLLO_GRAPH_REF no ambiente (configurações do ambiente, nunca no repositório).');
   process.exit(2);
 }
 if (!existsSync(bin)) {
   console.log('Compilando o router customizado (a primeira vez leva ~20 min)...');
-  if (spawnSync('cargo', ['build', '--release'], { cwd: join(root, 'router-subscription-snapshot'), stdio: 'inherit' }).status !== 0) process.exit(1);
+  if (spawnSync('cargo', ['build', '--release'], { cwd: root, stdio: 'inherit' }).status !== 0) process.exit(1);
 }
 
 const mode = process.env.MODE ?? 'passthrough';
 if (!['passthrough', 'callback'].includes(mode)) throw new Error(`MODE inválido: ${mode}`);
 // ROUTER_CONFIG_DIR: outra pasta com os dois YAMLs (ex.: saída de `router config upgrade`).
-const configDir = process.env.ROUTER_CONFIG_DIR ?? join(root, 'router');
+const configDir = process.env.ROUTER_CONFIG_DIR ?? join(root, 'examples/router');
 const config = join(configDir, mode === 'callback' ? 'router-plugin-callback.yaml' : 'router-plugin.yaml');
 const dir = mkdtempSync(join(tmpdir(), 'router-real-'));
 const periodicMs = Number(process.env.PERIODIC_MS ?? 3000);

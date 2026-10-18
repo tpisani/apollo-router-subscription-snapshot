@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
-import { startStack } from '../scripts/stack.mjs';
-import { startEdge } from '../scripts/edge.mjs';
+import { startStack } from '../emulator/stack.mjs';
+import { startEdge } from '../emulator/edge.mjs';
 import { createSync, runSync } from '../client/sync.mjs';
 import { snapshotApi, transports } from '../client/transport.mjs';
-import { scoreboardOps, applyStatEvents, playGenerator } from '../src/sports.mjs';
+import { scoreboardOps, applyStatEvents, playGenerator } from '../subgraphs/sports.mjs';
 
 // Várias instâncias: 3 edges independentes (cada um com sua deduplicação e retenção,
 // como instâncias do Router) atrás de um balanceador round-robin sem afinidade.

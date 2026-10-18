@@ -76,7 +76,7 @@ export async function* multipart(body, boundary) {
 const fail = errors => Object.assign(new Error(errors[0]?.message ?? 'Erro na subscription'), { code: errors[0]?.extensions?.code });
 
 // onBytes recebe o tamanho de cada frame entregue, para medir banda por canal.
-// onPayload recebe cada payload inteiro (ex.: extensions.retainedFrame do plugin do Router).
+// onPayload recebe cada payload inteiro (ex.: extensions.snapshot do plugin do Router).
 export async function* multipartFrames(url, channel, matchId, { signal, headers = {}, onBytes = () => {}, onPayload = () => {} } = {}) {
   const { subscription, field } = CHANNELS[channel];
   const response = await fetch(url, { method: 'POST', signal,

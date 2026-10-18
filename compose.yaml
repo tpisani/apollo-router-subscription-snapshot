@@ -89,16 +89,16 @@ services:
       redis:
         condition: service_healthy
 
-  # Perfil apollo-plugin: o Router customizado de router-plugin/ (apollo-router
-  # 2.18.0 + poc.retain_last_frame), em 3 instâncias atrás de um balanceador sem
+  # Perfil apollo-plugin: o Router customizado de router-subscription-snapshot/ (apollo-router
+  # 2.18.0 + subscription_snapshot), em 3 instâncias atrás de um balanceador sem
   # afinidade, e uma quarta com a retenção desligada para comparar. Exige
   # APOLLO_KEY/APOLLO_GRAPH_REF (subscriptions federadas estão no plano gratuito).
   #   docker compose --profile apollo-plugin up --build -d
   #   npm run test:router-scale
   router-a: &plugin-router
     profiles: [apollo-plugin]
-    build: ./router-plugin
-    image: poc-router:local
+    build: ./router-subscription-snapshot
+    image: router-subscription-snapshot:local
     command: ["--config", "/dist/config/router-plugin.yaml", "--supergraph", "/supergraph/supergraph.graphql"]
     environment:
       APOLLO_KEY: ${APOLLO_KEY:-}

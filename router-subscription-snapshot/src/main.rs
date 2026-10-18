@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod harness;
-mod retain;
+mod snapshot;
 
 fn main() -> anyhow::Result<()> {
     apollo_router::main()

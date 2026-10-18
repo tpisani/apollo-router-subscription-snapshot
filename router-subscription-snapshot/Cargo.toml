@@ -1,9 +1,9 @@
 [package]
-name = "poc-router"
+name = "router-subscription-snapshot"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Apollo Router com o plugin poc.retain_last_frame (retenção do último frame de subscriptions deduplicadas)"
+description = "Apollo Router com o plugin subscription_snapshot: o último estado de uma subscription deduplicada para quem entra depois"
 
 [[bin]]
 name = "router"

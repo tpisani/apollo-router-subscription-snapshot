@@ -3992,26 +3992,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
-name = "poc-router"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "apollo-router",
- "async-trait",
- "bytes",
- "futures",
- "http",
- "http-body-util",
- "schemars",
- "serde",
- "serde_json",
- "serde_json_bytes",
- "tokio",
- "tower",
- "tracing",
-]
-
-[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4613,6 +4593,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ba8be72d372b2c9b35542551678538b562e7cf86c3315773cae48dfbfe7790c"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "router-subscription-snapshot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "apollo-router",
+ "async-trait",
+ "bytes",
+ "futures",
+ "http",
+ "http-body-util",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_json_bytes",
+ "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

@@ -5,6 +5,11 @@ Ambiente: Linux, Node.js 22.22.0, Hive Gateway 2.15.2, Docker 29.8; apollo-route
 desta foram medidas com a 2.10.5, antes da atualização, e foram refeitas na 2.18.0
 com os mesmos resultados (próxima seção).
 
+O plugin se chamava `poc.retain_last_frame`, com a marca `extensions.retainedFrame`,
+na pasta `router-plugin/`. Foi renomeado para `subscription_snapshot`, com a marca
+`extensions.snapshot`, na pasta `router-subscription-snapshot/`, sem mudar o
+comportamento. Os resultados abaixo valem para o mesmo código.
+
 ## Atualização para a 2.18.0
 
 - **Plugin:** compila sem mudar o código (`cargo build --release --locked`).
@@ -87,7 +92,7 @@ causa não foi investigada.
 
 ## Apollo Router de verdade com GraphOS (`npm run test:router-real`)
 
-O binário de `router-plugin/` (2.10.5 + plugin) com uma chave do GraphOS (plano
+O binário de `router-subscription-snapshot/` (2.10.5 + plugin) com uma chave do GraphOS (plano
 gratuito, graph só de teste): 3 instâncias com retenção atrás do balanceador e 1
 sem, contra os subgraphs Node, frame periódico de 3 s. Clientes em HTTP multipart
 (o único transporte de subscription do Router para clientes). Só as subscriptions
@@ -154,7 +159,7 @@ não houver deduplicação.
   `{ data: null }`, frames como `next`, e um 404 do Router fecha o stream sem
   `complete`. Esse teste achou um `complete` indevido depois do 404, corrigido.
 
-## Plugin do Router (`router-plugin/`, `poc.retain_last_frame`)
+## Plugin do Router (`router-subscription-snapshot/`, `subscription_snapshot`)
 
 - **`cargo test --release` (8):** inclui a liberação no fim do stream; o marcador passa intacto; o primeiro assinante
   não recebe frame retido e alimenta o store; o late joiner recebe o retido logo
@@ -176,7 +181,7 @@ não houver deduplicação.
 
 | Teste | Resultado |
 | --- | --- |
-| Deduplicação e retenção | 1 stream no subgraph para 2 clientes; late joiner em **1 ms** com `retainedFrame`, na mesma versão do primeiro; os dois recebem o gol seguinte; sem assinantes, o upstream fecha |
+| Deduplicação e retenção | 1 stream no subgraph para 2 clientes; late joiner em **1 ms** com `extensions.snapshot`, na mesma versão do primeiro; os dois recebem o gol seguinte; sem assinantes, o upstream fecha |
 | Sem retenção (`enabled: false`) | late joiner em **2.799 ms**, esperando o periódico |
 | Identidade | `authorization` diferente: 2 upstreams, e só o cliente com o mesmo token recebe o frame retido |
 
@@ -190,7 +195,7 @@ não houver deduplicação.
   propósito, o GraphOS responde `ACCESS_DENIED`: o binário no host alcança o
   uplink pelo proxy da sessão. `npm run test:router-real` falha nesse ponto com
   a mensagem do Router, sem deixar processos.
-- **Imagem Docker** (`router-plugin/Dockerfile`, na época com Rust 1.97): compila e
+- **Imagem Docker** (`router-subscription-snapshot/Dockerfile`, na época com Rust 1.97): compila e
   `config validate` passa dentro dela. O perfil `apollo-plugin` sobe todos os
   serviços, mas aqui, sem proxy nos containers, os routers ficam tentando buscar
   a licença (`fetch failed from all 2 uplink endpoints`) e não abrem a porta. Por

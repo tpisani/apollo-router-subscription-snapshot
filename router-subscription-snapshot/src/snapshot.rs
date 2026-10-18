@@ -1,5 +1,6 @@
-//! `poc.retain_last_frame`: guarda o último evento de cada subscription deduplicada e
-//! o entrega a quem entra num upstream já aberto, logo depois do marcador de início.
+//! `subscription_snapshot`: guarda o último evento de cada subscription deduplicada
+//! (o snapshot) e o entrega a quem entra num upstream já aberto, logo depois do
+//! marcador de início, marcado com `extensions.snapshot: true`.
 //!
 //! O stream que sai do supergraph service numa subscription é:
 //!   1. um marcador (`subscribed == Some(true)`, sem dados), que o router service
@@ -34,8 +35,8 @@ use tower::BoxError;
 use tower::ServiceExt;
 
 const OPERATION_KIND: &str = "apollo::supergraph::operation_kind";
-/// Extensão adicionada ao frame retido, para que testes e clientes o distingam.
-pub const RETAINED_EXTENSION: &str = "retainedFrame";
+/// Extensão adicionada ao snapshot, para que testes e clientes o distingam.
+pub const SNAPSHOT_EXTENSION: &str = "snapshot";
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
@@ -119,7 +120,7 @@ impl<T: Clone> Drop for Subscription<T> {
 }
 
 /// Chave: documento, nome da operação, variáveis e os headers de identidade.
-pub fn retention_key(request: &http::Request<graphql::Request>, identity_headers: &[String]) -> String {
+pub fn snapshot_key(request: &http::Request<graphql::Request>, identity_headers: &[String]) -> String {
     let body = request.body();
     let identity: Vec<(&str, &str)> = identity_headers
         .iter()
@@ -137,7 +138,7 @@ fn is_event(frame: &graphql::Response) -> bool {
 
 /// Insere o frame retido depois do marcador e guarda cada evento novo.
 /// Streams que não começam com um marcador de subscription aberta passam intactos.
-pub fn retain_stream(
+pub fn snapshot_stream(
     responses: graphql::ResponseStream,
     store: Arc<Store<graphql::Response>>,
     key: String,
@@ -151,7 +152,7 @@ pub fn retain_stream(
             }
             let (retained, subscription) = store.join(&key);
             let retained = retained.map(|mut frame| {
-                frame.extensions.insert(RETAINED_EXTENSION, true.into());
+                frame.extensions.insert(SNAPSHOT_EXTENSION, true.into());
                 frame
             });
             // O assinante sai do Store quando o stream termina (item final com
@@ -175,13 +176,13 @@ pub fn retain_stream(
         .boxed()
 }
 
-pub struct RetainLastFrame {
+pub struct SubscriptionSnapshot {
     config: Config,
     store: Arc<Store<graphql::Response>>,
 }
 
 #[async_trait::async_trait]
-impl Plugin for RetainLastFrame {
+impl Plugin for SubscriptionSnapshot {
     type Config = Config;
 
     async fn new(init: PluginInit<Self::Config>) -> Result<Self, BoxError> {
@@ -196,7 +197,7 @@ impl Plugin for RetainLastFrame {
         let store = self.store.clone();
         service
             .map_future_with_request_data(
-                move |req: &supergraph::Request| retention_key(&req.supergraph_request, &headers),
+                move |req: &supergraph::Request| snapshot_key(&req.supergraph_request, &headers),
                 move |key: String, response| {
                     let store = store.clone();
                     async move {
@@ -205,7 +206,7 @@ impl Plugin for RetainLastFrame {
                         if kind.as_deref() != Some("subscription") {
                             return Ok(response);
                         }
-                        Ok(response.map(move |responses| retain_stream(responses, store, key)))
+                        Ok(response.map(move |responses| snapshot_stream(responses, store, key)))
                     }
                 },
             )
@@ -213,7 +214,7 @@ impl Plugin for RetainLastFrame {
     }
 }
 
-register_plugin!("poc", "retain_last_frame", RetainLastFrame);
+register_plugin!("", "subscription_snapshot", SubscriptionSnapshot);
 
 #[cfg(test)]
 mod tests {
@@ -235,8 +236,8 @@ mod tests {
     fn version(frame: &graphql::Response) -> Option<i64> {
         frame.data.as_ref()?.get("scoreboardUpdates")?.get("version")?.as_i64()
     }
-    fn retained(frame: &graphql::Response) -> bool {
-        frame.extensions.get(RETAINED_EXTENSION) == Some(&true.into())
+    fn is_snapshot(frame: &graphql::Response) -> bool {
+        frame.extensions.get(SNAPSHOT_EXTENSION) == Some(&true.into())
     }
     fn upstream(frames: Vec<graphql::Response>) -> graphql::ResponseStream {
         stream::iter(frames).boxed()
@@ -245,7 +246,7 @@ mod tests {
     #[tokio::test]
     async fn primeiro_assinante_nao_recebe_frame_retido_e_alimenta_o_store() {
         let store = Arc::<Store<graphql::Response>>::default();
-        let mut s = retain_stream(upstream(vec![marker(), event(1), event(2)]), store.clone(), "k".into());
+        let mut s = snapshot_stream(upstream(vec![marker(), event(1), event(2)]), store.clone(), "k".into());
         let first = s.next().await.unwrap();
         assert_eq!(first.subscribed, Some(true));
         assert!(first.data.is_none(), "o marcador passa intacto");
@@ -258,18 +259,18 @@ mod tests {
     async fn late_joiner_recebe_o_frame_retido_logo_depois_do_marcador() {
         let store = Arc::<Store<graphql::Response>>::default();
         let (pending_tx, pending_rx) = futures::channel::mpsc::unbounded();
-        let mut a = retain_stream(stream::iter(vec![marker(), event(7)]).chain(pending_rx).boxed(), store.clone(), "k".into());
+        let mut a = snapshot_stream(stream::iter(vec![marker(), event(7)]).chain(pending_rx).boxed(), store.clone(), "k".into());
         a.next().await;
         a.next().await; // a viu a versão 7
 
-        let mut b = retain_stream(upstream(vec![marker(), event(8)]), store.clone(), "k".into());
+        let mut b = snapshot_stream(upstream(vec![marker(), event(8)]), store.clone(), "k".into());
         let frames: Vec<_> = (&mut b).collect().await;
         assert!(frames[0].data.is_none() && frames[0].subscribed == Some(true), "marcador primeiro");
-        assert!(retained(&frames[1]));
+        assert!(is_snapshot(&frames[1]));
         assert_eq!(version(&frames[1]), Some(7));
         assert_eq!(frames[1].subscribed, Some(true), "o retido mantém o multipart aberto");
         assert_eq!(version(&frames[2]), Some(8));
-        assert!(!retained(&frames[2]));
+        assert!(!is_snapshot(&frames[2]));
         drop(pending_tx);
     }
 
@@ -277,12 +278,12 @@ mod tests {
     async fn chaves_diferentes_nao_compartilham_frame() {
         let store = Arc::<Store<graphql::Response>>::default();
         let (_tx, rx) = futures::channel::mpsc::unbounded();
-        let mut a = retain_stream(stream::iter(vec![marker(), event(3)]).chain(rx).boxed(), store.clone(), "token-a".into());
+        let mut a = snapshot_stream(stream::iter(vec![marker(), event(3)]).chain(rx).boxed(), store.clone(), "token-a".into());
         a.next().await;
         a.next().await;
-        let frames: Vec<_> = retain_stream(upstream(vec![marker()]), store.clone(), "token-b".into()).collect().await;
+        let frames: Vec<_> = snapshot_stream(upstream(vec![marker()]), store.clone(), "token-b".into()).collect().await;
         assert_eq!(frames.len(), 1);
-        assert!(frames.iter().all(|f| !retained(f)));
+        assert!(frames.iter().all(|f| !is_snapshot(f)));
     }
 
     #[tokio::test]
@@ -294,7 +295,7 @@ mod tests {
             .subscribed(true)
             .build();
         let (_tx, rx) = futures::channel::mpsc::unbounded();
-        let mut a = retain_stream(stream::iter(vec![marker(), event(1), error, end()]).chain(rx).boxed(), store.clone(), "k".into());
+        let mut a = snapshot_stream(stream::iter(vec![marker(), event(1), error, end()]).chain(rx).boxed(), store.clone(), "k".into());
         for _ in 0..3 {
             a.next().await;
         }
@@ -308,8 +309,8 @@ mod tests {
         let store = Arc::<Store<graphql::Response>>::default();
         let (_tx1, rx1) = futures::channel::mpsc::unbounded();
         let (_tx2, rx2) = futures::channel::mpsc::unbounded();
-        let mut a = retain_stream(stream::iter(vec![marker(), event(1)]).chain(rx1).boxed(), store.clone(), "k".into());
-        let mut b = retain_stream(stream::iter(vec![marker()]).chain(rx2).boxed(), store.clone(), "k".into());
+        let mut a = snapshot_stream(stream::iter(vec![marker(), event(1)]).chain(rx1).boxed(), store.clone(), "k".into());
+        let mut b = snapshot_stream(stream::iter(vec![marker()]).chain(rx2).boxed(), store.clone(), "k".into());
         a.next().await;
         a.next().await;
         b.next().await;
@@ -324,20 +325,20 @@ mod tests {
     async fn fim_do_stream_libera_a_entrada_mesmo_sem_descartar_o_cliente() {
         let store = Arc::<Store<graphql::Response>>::default();
         // Item final (subscribed: false), como o Router manda quando o upstream termina.
-        let mut a = retain_stream(upstream(vec![marker(), event(1), end()]), store.clone(), "k".into());
+        let mut a = snapshot_stream(upstream(vec![marker(), event(1), end()]), store.clone(), "k".into());
         a.next().await;
         a.next().await;
         assert_eq!(store.len(), 1);
         a.next().await;
         assert_eq!(store.len(), 0, "liberado no item final, com o stream ainda vivo");
         // Fim do stream sem item final.
-        let mut b = retain_stream(upstream(vec![marker(), event(2)]), store.clone(), "k".into());
+        let mut b = snapshot_stream(upstream(vec![marker(), event(2)]), store.clone(), "k".into());
         b.next().await;
         b.next().await;
         assert!(b.next().await.is_none());
         assert_eq!(store.len(), 0, "liberado no fim do stream");
-        let frames: Vec<_> = retain_stream(upstream(vec![marker()]), store.clone(), "k".into()).collect().await;
-        assert!(frames.iter().all(|f| !retained(f)), "quem chega depois não recebe frame do upstream encerrado");
+        let frames: Vec<_> = snapshot_stream(upstream(vec![marker()]), store.clone(), "k".into()).collect().await;
+        assert!(frames.iter().all(|f| !is_snapshot(f)), "quem chega depois não recebe frame do upstream encerrado");
     }
 
     #[tokio::test]
@@ -347,7 +348,7 @@ mod tests {
             .error(graphql::Error::builder().message("bad").extension_code("X").build())
             .subscribed(false)
             .build();
-        let frames: Vec<_> = retain_stream(upstream(vec![rejected.clone()]), store.clone(), "k".into()).collect().await;
+        let frames: Vec<_> = snapshot_stream(upstream(vec![rejected.clone()]), store.clone(), "k".into()).collect().await;
         assert_eq!(frames, vec![rejected]);
         assert_eq!(store.len(), 0);
     }
@@ -368,10 +369,10 @@ mod tests {
                 .unwrap()
         };
         let headers = vec!["authorization".to_string()];
-        let key = |token, id| retention_key(&request(token, id), &headers);
+        let key = |token, id| snapshot_key(&request(token, id), &headers);
         assert_eq!(key("a", "m1"), key("a", "m1"));
         assert_ne!(key("a", "m1"), key("b", "m1"));
         assert_ne!(key("a", "m1"), key("a", "m2"));
-        assert_eq!(retention_key(&request("a", "m1"), &[]), retention_key(&request("b", "m1"), &[]));
+        assert_eq!(snapshot_key(&request("a", "m1"), &[]), snapshot_key(&request("b", "m1"), &[]));
     }
 }

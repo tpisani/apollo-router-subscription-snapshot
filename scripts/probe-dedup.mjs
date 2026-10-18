@@ -19,7 +19,7 @@ const app = await startSubgraphs({ dataDir: dir, host: '127.0.0.1', ports: { sco
 const base = name => `http://127.0.0.1:${app.ports[name]}`;
 const sg = join(dir, 's.graphql');
 writeFileSync(sg, composeSupergraph({ scoresUrl: `${base('scores')}/graphql`, catalogUrl: `${base('catalog')}/graphql`, statsUrl: `${base('stats')}/graphql` }));
-const proc = spawn(join(root, 'router-plugin/target/release/router'), ['--config', join(root, mode === 'callback' ? 'router/router-plugin-callback.yaml' : 'router/router-plugin.yaml'), '--supergraph', sg],
+const proc = spawn(join(root, 'router-subscription-snapshot/target/release/router'), ['--config', join(root, mode === 'callback' ? 'router/router-plugin-callback.yaml' : 'router/router-plugin.yaml'), '--supergraph', sg],
   { env: { ...process.env, ROUTER_LISTEN: '127.0.0.1:4111', ROUTER_HEALTH_LISTEN: '127.0.0.1:8111', ROUTER_CALLBACK_URL: 'http://127.0.0.1:4111/callback', RUST_BACKTRACE: '0' }, stdio: 'ignore' });
 while (!(await fetch('http://127.0.0.1:8111/health?ready').then(r => r.ok, () => false))) await delay(200);
 const results = [];

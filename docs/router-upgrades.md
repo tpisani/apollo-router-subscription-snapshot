@@ -1,7 +1,7 @@
 # O plugin e as versões do Apollo Router
 
 Pergunta: com que frequência uma versão nova do Router quebra o
-`poc.retain_last_frame`?
+`subscription_snapshot`?
 
 Método (out/2026):
 - **Comparação estática:** o código-fonte publicado de 20 versões (1.61.13 e o
@@ -82,7 +82,7 @@ versões**: ela tem de acompanhar o binário.
 Feita como descrito abaixo, com o resultado:
 - **Código do plugin:** nenhuma mudança.
 - **Dependência e toolchain:** `apollo-router = "=2.18.0"` e um `Cargo.lock` novo;
-  Rust fixado em 1.97.1 (`router-plugin/rust-toolchain.toml` e
+  Rust fixado em 1.97.1 (`router-subscription-snapshot/rust-toolchain.toml` e
   `rust:1.97.1-bookworm` no Dockerfile).
 - **Configs:** `router.yaml`, `router-plugin.yaml` e `router-plugin-callback.yaml`
   migradas à mão, para manter os comentários: `deduplication.all.enabled` e
@@ -92,9 +92,9 @@ Feita como descrito abaixo, com o resultado:
 
 ## Como atualizar o Router
 
-1. **Trocar a versão:** `apollo-router = "=X.Y.Z"` no `router-plugin/Cargo.toml`.
+1. **Trocar a versão:** `apollo-router = "=X.Y.Z"` no `router-subscription-snapshot/Cargo.toml`.
    Ver a versão mínima do Rust (`rust-version` do crate) e a do
-   `router-plugin/Dockerfile`.
+   `router-subscription-snapshot/Dockerfile`.
 2. **Compilar:** `cargo build --release`. Se quebrar, o mais provável é uma
    dependência como o `schemars`; alinhar com a do Router.
 3. **Migrar a config:** `./target/release/router config upgrade ../router/router-plugin.yaml`
@@ -108,7 +108,7 @@ Para testar uma versão nova sem mexer na pasta do plugin:
 
 ```bash
 # ex.: da 2.18.0 para X.Y.Z, com o Rust mínimo dela (R)
-cp -r router-plugin /tmp/plugin-novo && sed -i 's/=2.18.0/=X.Y.Z/' /tmp/plugin-novo/Cargo.toml
+cp -r router-subscription-snapshot /tmp/plugin-novo && sed -i 's/=2.18.0/=X.Y.Z/' /tmp/plugin-novo/Cargo.toml
 PLUGIN_DIR=/tmp/plugin-novo CARGO_TOOLCHAIN=R npm run test:router-harness
 (cd /tmp/plugin-novo && cargo +R build --release)
 /tmp/plugin-novo/target/release/router config upgrade router/router-plugin.yaml > /tmp/cfg/router-plugin.yaml   # idem callback

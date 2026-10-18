@@ -8,8 +8,8 @@ import { composeSupergraph } from './compose.mjs';
 import { startBalancer } from './balancer.mjs';
 import { verifyRouterScale } from './verify-router-scale.mjs';
 
-// O teste de verdade, sem Docker: o binário de router-plugin/ (apollo-router 2.18.0 +
-// poc.retain_last_frame) com GraphOS, em 3 instâncias com retenção atrás de um
+// O teste de verdade, sem Docker: o binário de router-subscription-snapshot/ (apollo-router 2.18.0 +
+// subscription_snapshot) com GraphOS, em 3 instâncias com retenção atrás de um
 // balanceador e 1 sem retenção, contra os subgraphs Node. Os processos herdam o
 // ambiente (proxy, CA), o que os containers do compose não fazem numa sessão na nuvem.
 // Exige APOLLO_KEY e APOLLO_GRAPH_REF no ambiente; nunca os imprime.
@@ -17,14 +17,14 @@ import { verifyRouterScale } from './verify-router-scale.mjs';
 //   MODE=callback npm run test:router-real    (subgraphs por HTTP callback)
 const root = new URL('..', import.meta.url).pathname;
 // ROUTER_BIN: outro binário (ex.: o plugin compilado contra uma versão nova do Router).
-const bin = process.env.ROUTER_BIN ?? join(root, 'router-plugin/target/release/router');
+const bin = process.env.ROUTER_BIN ?? join(root, 'router-subscription-snapshot/target/release/router');
 if (!process.env.APOLLO_KEY || !process.env.APOLLO_GRAPH_REF) {
   console.error('Defina APOLLO_KEY e APOLLO_GRAPH_REF no ambiente (configurações do ambiente, nunca no repositório).');
   process.exit(2);
 }
 if (!existsSync(bin)) {
   console.log('Compilando o router customizado (a primeira vez leva ~20 min)...');
-  if (spawnSync('cargo', ['build', '--release'], { cwd: join(root, 'router-plugin'), stdio: 'inherit' }).status !== 0) process.exit(1);
+  if (spawnSync('cargo', ['build', '--release'], { cwd: join(root, 'router-subscription-snapshot'), stdio: 'inherit' }).status !== 0) process.exit(1);
 }
 
 const mode = process.env.MODE ?? 'passthrough';
@@ -87,7 +87,7 @@ try {
     kill: process.env.KILL === '0' ? undefined : async () => { lb.remove(killed.url); killed.proc.kill('SIGKILL'); },
     log: console.log
   });
-  console.log(JSON.stringify({ router: '2.18.0 + poc.retain_last_frame', modo: mode, instancias: 3, periodicoMs: periodicMs, ...result }, null, 2));
+  console.log(JSON.stringify({ router: '2.18.0 + subscription_snapshot', modo: mode, instancias: 3, periodicoMs: periodicMs, ...result }, null, 2));
   console.log(`OK: Apollo Router de verdade com o plugin, em várias instâncias (modo ${mode})`);
   code = 0;
 } catch (error) {
